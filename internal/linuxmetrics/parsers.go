@@ -22,16 +22,19 @@ func parseCPU(reader io.Reader) (CPUCounters, error) {
 		}
 		values := make([]uint64, 0, len(fields)-1)
 		var total uint64
-		for _, raw := range fields[1:] {
+		for index, raw := range fields[1:] {
 			value, err := strconv.ParseUint(raw, 10, 64)
 			if err != nil {
 				return CPUCounters{}, errors.New("parse /proc/stat: invalid CPU counter")
+			}
+			values = append(values, value)
+			if index >= 8 {
+				continue
 			}
 			if math.MaxUint64-total < value {
 				return CPUCounters{}, errors.New("parse /proc/stat: CPU counter sum overflows")
 			}
 			total += value
-			values = append(values, value)
 		}
 		idle := values[3]
 		if len(values) > 4 {

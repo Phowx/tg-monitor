@@ -64,6 +64,7 @@ if [[ -z "$server_id" || -z "$agent_token" ]]; then
     echo "registration=failed" >&2
     exit 1
 fi
+printf 'registration=ok server_id=%s\n' "$server_id"
 
 TG_MONITOR_DATABASE_PATH="$database" \
 TG_MONITOR_LISTEN_ADDR="127.0.0.1:$port" \
@@ -71,14 +72,12 @@ TG_MONITOR_CHECKPOINT_INTERVAL=100ms \
     "$server_binary" serve >/dev/null 2>>"$server_log" &
 server_pid=$!
 wait_for_port "$port"
-printf '%s\n' 'central_ready=ok'
 
 TG_MONITOR_AGENT_SERVER_URL="http://127.0.0.1:$port" \
 TG_MONITOR_AGENT_TOKEN="$agent_token" \
 TG_MONITOR_AGENT_INTERVAL=100ms \
 TG_MONITOR_AGENT_HTTP_TIMEOUT=2s \
     "$agent_binary" once >/dev/null 2>>"$agent_log"
-printf '%s\n' 'agent_once=ok'
 
 latest_output="$(TG_MONITOR_DATABASE_PATH="$database" "$server_binary" metrics latest --server-id "$server_id" 2>>"$server_log")"
 if ! grep -Fq '"server_id": '"$server_id" <<<"$latest_output"; then
@@ -86,7 +85,6 @@ if ! grep -Fq '"server_id": '"$server_id" <<<"$latest_output"; then
     exit 1
 fi
 unset latest_output
-printf '%s\n' 'latest_check=ok'
 
 history_output=""
 for ((attempt = 0; attempt < 100; attempt++)); do
@@ -101,7 +99,7 @@ if ! grep -Fq '"server_id": '"$server_id" <<<"$history_output"; then
     exit 1
 fi
 unset history_output
-printf '%s\n' 'history_check=ok'
+printf '%s\n' 'agent_once=ok ingestion=ok latest=ok history=ok'
 
 TG_MONITOR_AGENT_SERVER_URL="http://127.0.0.1:$port" \
 TG_MONITOR_AGENT_TOKEN="$agent_token" \
@@ -113,11 +111,10 @@ sleep 0.35
 kill -TERM "$agent_pid"
 wait "$agent_pid"
 agent_pid=""
-printf '%s\n' 'agent_sigterm=ok'
 
 if grep -Fq -- "$agent_token" "$server_log" "$agent_log"; then
     echo "token_log_scan=leak" >&2
     exit 1
 fi
 unset agent_token
-printf '%s\n' 'token_log_scan=clean'
+printf '%s\n' 'agent_sigterm=clean token_log_scan=clean'

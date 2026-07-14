@@ -7,12 +7,12 @@ import (
 	"testing"
 )
 
-func TestParseCPU(t *testing.T) {
+func TestParseCPUIgnoresGuestCountersAlreadyIncludedInUser(t *testing.T) {
 	got, err := parseCPU(strings.NewReader("cpu  100 20 30 400 10 5 6 7 8 9\ncpu0 1 2 3 4\n"))
 	if err != nil {
 		t.Fatalf("parseCPU() error = %v", err)
 	}
-	want := CPUCounters{Total: 595, Idle: 410}
+	want := CPUCounters{Total: 578, Idle: 410}
 	if got != want {
 		t.Fatalf("parseCPU() = %#v, want %#v", got, want)
 	}
