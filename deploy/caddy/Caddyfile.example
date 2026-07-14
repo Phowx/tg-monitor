@@ -1,0 +1,5 @@
+# Replace this hostname with the public DNS name used by Agents.
+monitor.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080
+}

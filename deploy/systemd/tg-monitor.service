@@ -1,0 +1,34 @@
+[Unit]
+Description=tg-monitor central server
+Documentation=https://github.com/Phowx/tg-monitor
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=tg-monitor
+Group=tg-monitor
+EnvironmentFile=/etc/tg-monitor/server.env
+StateDirectory=tg-monitor
+StateDirectoryMode=0750
+ExecStart=/usr/local/bin/tg-monitor-server serve
+Restart=on-failure
+RestartSec=5s
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

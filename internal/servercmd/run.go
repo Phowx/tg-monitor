@@ -1,0 +1,271 @@
+package servercmd
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"os"
+	"strings"
+
+	"github.com/tg-monitor/tg-monitor/internal/auth"
+	"github.com/tg-monitor/tg-monitor/internal/config"
+	"github.com/tg-monitor/tg-monitor/internal/domain"
+	"github.com/tg-monitor/tg-monitor/internal/serverapp"
+	"github.com/tg-monitor/tg-monitor/internal/storage/sqlite"
+)
+
+type Store interface {
+	Close() error
+	CreateServer(context.Context, domain.Server) (domain.Server, error)
+	ListServers(context.Context) ([]domain.Server, error)
+	UpdateServerTokenHash(context.Context, int64, []byte) error
+	GetLatestMetrics(context.Context, int64) (domain.LatestMetrics, error)
+	QueryMinuteSamples(context.Context, int64, int64, int64) ([]domain.MinuteSample, error)
+}
+
+type Dependencies struct {
+	Stdout     io.Writer
+	Stderr     io.Writer
+	Random     io.Reader
+	LoadConfig func() (config.ServerRuntimeConfig, error)
+	OpenStore  func(context.Context, string) (Store, error)
+	Serve      func(context.Context, config.ServerRuntimeConfig, *slog.Logger) error
+}
+
+func Run(ctx context.Context, args []string, dependencies Dependencies) error {
+	dependencies = dependencies.withDefaults()
+	if len(args) == 0 {
+		return errors.New("usage: tg-monitor-server <serve|server|metrics>")
+	}
+
+	switch args[0] {
+	case "serve":
+		return runServe(ctx, args[1:], dependencies)
+	case "server":
+		return runServer(ctx, args[1:], dependencies)
+	case "metrics":
+		return runMetrics(ctx, args[1:], dependencies)
+	default:
+		return fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+func runServe(ctx context.Context, args []string, dependencies Dependencies) error {
+	if len(args) != 0 {
+		return errors.New("usage: tg-monitor-server serve")
+	}
+	cfg, err := dependencies.LoadConfig()
+	if err != nil {
+		return err
+	}
+	logger := slog.New(slog.NewJSONHandler(dependencies.Stderr, nil))
+	return dependencies.Serve(ctx, cfg, logger)
+}
+
+func runServer(ctx context.Context, args []string, dependencies Dependencies) error {
+	if len(args) == 0 {
+		return errors.New("usage: tg-monitor-server server <add|list|rotate-token>")
+	}
+	switch args[0] {
+	case "add":
+		return runServerAdd(ctx, args[1:], dependencies)
+	case "list":
+		return runServerList(ctx, args[1:], dependencies)
+	case "rotate-token":
+		return runServerRotateToken(ctx, args[1:], dependencies)
+	default:
+		return fmt.Errorf("unknown server command %q", args[0])
+	}
+}
+
+func runServerAdd(ctx context.Context, args []string, dependencies Dependencies) error {
+	flags := newFlagSet("server add", dependencies.Stderr)
+	name := flags.String("name", "", "server name")
+	group := flags.String("group", "", "server group")
+	sortOrder := flags.Int("sort-order", 0, "server sort order")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*name) == "" {
+		return errors.New("usage: tg-monitor-server server add --name <name> [--group <group>] [--sort-order <n>]")
+	}
+
+	return withStore(ctx, dependencies, func(store Store) error {
+		rawToken, tokenHash, err := auth.GenerateToken(dependencies.Random)
+		if err != nil {
+			return err
+		}
+		server, err := store.CreateServer(ctx, domain.Server{
+			Name:        strings.TrimSpace(*name),
+			Group:       strings.TrimSpace(*group),
+			SortOrder:   *sortOrder,
+			Enabled:     true,
+			TokenSHA256: tokenHash,
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(dependencies.Stdout, "server_id=%d\nagent_token=%s\n", server.ID, rawToken); err != nil {
+			return fmt.Errorf("write server credentials: %w", err)
+		}
+		return nil
+	})
+}
+
+func runServerList(ctx context.Context, args []string, dependencies Dependencies) error {
+	if len(args) != 0 {
+		return errors.New("usage: tg-monitor-server server list")
+	}
+	return withStore(ctx, dependencies, func(store Store) error {
+		servers, err := store.ListServers(ctx)
+		if err != nil {
+			return err
+		}
+		return encodeIndented(dependencies.Stdout, servers)
+	})
+}
+
+func runServerRotateToken(ctx context.Context, args []string, dependencies Dependencies) error {
+	flags := newFlagSet("server rotate-token", dependencies.Stderr)
+	id := flags.Int64("id", 0, "server ID")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *id <= 0 {
+		return errors.New("usage: tg-monitor-server server rotate-token --id <id>")
+	}
+	return withStore(ctx, dependencies, func(store Store) error {
+		rawToken, tokenHash, err := auth.GenerateToken(dependencies.Random)
+		if err != nil {
+			return err
+		}
+		if err := store.UpdateServerTokenHash(ctx, *id, tokenHash); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(dependencies.Stdout, "server_id=%d\nagent_token=%s\n", *id, rawToken); err != nil {
+			return fmt.Errorf("write rotated credentials: %w", err)
+		}
+		return nil
+	})
+}
+
+func runMetrics(ctx context.Context, args []string, dependencies Dependencies) error {
+	if len(args) == 0 {
+		return errors.New("usage: tg-monitor-server metrics <latest|history>")
+	}
+	switch args[0] {
+	case "latest":
+		return runMetricsLatest(ctx, args[1:], dependencies)
+	case "history":
+		return runMetricsHistory(ctx, args[1:], dependencies)
+	default:
+		return fmt.Errorf("unknown metrics command %q", args[0])
+	}
+}
+
+func runMetricsLatest(ctx context.Context, args []string, dependencies Dependencies) error {
+	flags := newFlagSet("metrics latest", dependencies.Stderr)
+	serverID := flags.Int64("server-id", 0, "server ID")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *serverID <= 0 {
+		return errors.New("usage: tg-monitor-server metrics latest --server-id <id>")
+	}
+	return withStore(ctx, dependencies, func(store Store) error {
+		latest, err := store.GetLatestMetrics(ctx, *serverID)
+		if err != nil {
+			return err
+		}
+		return encodeIndented(dependencies.Stdout, latest)
+	})
+}
+
+func runMetricsHistory(ctx context.Context, args []string, dependencies Dependencies) error {
+	flags := newFlagSet("metrics history", dependencies.Stderr)
+	serverID := flags.Int64("server-id", 0, "server ID")
+	fromMS := flags.Int64("from-ms", 0, "inclusive start in Unix milliseconds")
+	toMS := flags.Int64("to-ms", 0, "exclusive end in Unix milliseconds")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *serverID <= 0 || *fromMS < 0 || *toMS <= *fromMS {
+		return errors.New("usage: tg-monitor-server metrics history --server-id <id> --from-ms <inclusive> --to-ms <exclusive>")
+	}
+	return withStore(ctx, dependencies, func(store Store) error {
+		history, err := store.QueryMinuteSamples(ctx, *serverID, *fromMS, *toMS)
+		if err != nil {
+			return err
+		}
+		return encodeIndented(dependencies.Stdout, history)
+	})
+}
+
+func withStore(ctx context.Context, dependencies Dependencies, operation func(Store) error) error {
+	cfg, err := dependencies.LoadConfig()
+	if err != nil {
+		return err
+	}
+	store, err := dependencies.OpenStore(ctx, cfg.DatabasePath)
+	if err != nil {
+		return err
+	}
+	return errors.Join(operation(store), store.Close())
+}
+
+func newFlagSet(name string, output io.Writer) *flag.FlagSet {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(output)
+	return flags
+}
+
+func encodeIndented(output io.Writer, value any) error {
+	encoder := json.NewEncoder(output)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
+		return fmt.Errorf("encode command output: %w", err)
+	}
+	return nil
+}
+
+func (dependencies Dependencies) withDefaults() Dependencies {
+	if dependencies.Stdout == nil {
+		dependencies.Stdout = os.Stdout
+	}
+	if dependencies.Stderr == nil {
+		dependencies.Stderr = os.Stderr
+	}
+	if dependencies.Random == nil {
+		dependencies.Random = rand.Reader
+	}
+	if dependencies.LoadConfig == nil {
+		dependencies.LoadConfig = config.LoadServerRuntimeFromEnv
+	}
+	if dependencies.OpenStore == nil {
+		dependencies.OpenStore = func(ctx context.Context, path string) (Store, error) {
+			return sqlite.Open(ctx, path)
+		}
+	}
+	if dependencies.Serve == nil {
+		dependencies.Serve = serve
+	}
+	return dependencies
+}
+
+func serve(ctx context.Context, cfg config.ServerRuntimeConfig, logger *slog.Logger) error {
+	app, err := serverapp.New(ctx, cfg, logger)
+	if err != nil {
+		return err
+	}
+	listener, err := net.Listen("tcp", cfg.ListenAddr)
+	if err != nil {
+		return errors.Join(fmt.Errorf("listen on %s: %w", cfg.ListenAddr, err), app.Close(ctx))
+	}
+	return app.Serve(ctx, listener)
+}
