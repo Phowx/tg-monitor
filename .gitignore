@@ -1,0 +1,11 @@
+.superpowers/
+.cache/
+bin/
+dist/
+node_modules/
+coverage/
+*.db
+*.db-shm
+*.db-wal
+.env
+
