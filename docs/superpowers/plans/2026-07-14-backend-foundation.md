@@ -99,7 +99,7 @@ func (r MetricReport) Validate() error {
 }
 ```
 
-Define `MinuteSample` with float64 averaged used-byte fields and int64 latest totals/counters, plus `Server`, `Settings`, and `Session` exactly as described in the design.
+Define `MinuteSample` with int64 averaged used-byte fields and int64 latest totals/counters, plus `Server`, `Settings`, and `Session` exactly as described in the design.
 
 - [ ] **Step 4: Run GREEN**
 
@@ -267,7 +267,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 }
 ```
 
-`Migrate` creates `schema_migrations`, checks the maximum version, and applies one transaction containing the exact schema and settings seed. Use `INTEGER NOT NULL CHECK` constraints for non-negative and singleton fields, `ON DELETE CASCADE` for server-owned current/history/state rows, unique `(server_id,bucket_ms)`, `metric_samples_server_bucket_idx`, and `alert_outbox_delivery_idx(delivered_at_ms,next_attempt_at_ms)`.
+`Migrate` creates `schema_migrations`, checks the maximum version, and applies one transaction containing the exact schema and settings seed. Store all byte-size columns as `INTEGER`; use `INTEGER NOT NULL CHECK` constraints for non-negative and singleton fields, `ON DELETE CASCADE` for server-owned current/history/state rows, unique `(server_id,bucket_ms)`, `metric_samples_server_bucket_idx`, and `alert_outbox_delivery_idx(delivered_at_ms,next_attempt_at_ms)`.
 
 - [ ] **Step 4: Run GREEN**
 
