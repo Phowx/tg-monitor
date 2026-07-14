@@ -1,27 +1,30 @@
 # tg-monitor
 
-`tg-monitor` is a self-hosted server monitoring project. The current release is the deployable central-server slice: a CGO-free Go binary accepts authenticated metric reports, persists current and UTC-minute data in SQLite, and provides local administration commands.
+`tg-monitor` is a self-hosted server monitoring project. The current release includes a deployable central server and a non-root Linux Agent. Both are CGO-free Go binaries for amd64 and arm64.
 
-The Linux Agent, Telegram Bot/WebApp, alert delivery, and browser UI are planned follow-on phases and are not part of this slice yet.
+The Telegram Bot/WebApp, alert delivery, and browser UI remain planned follow-on phases.
 
 ## Current capabilities
 
 - Local server registration and token rotation. Each Agent token is shown once; only its SHA-256 hash is stored.
+- A Linux Agent that collects CPU, memory, root filesystem, load, network, uptime, and host identity directly from the kernel.
 - `POST /api/v1/metrics` with Bearer authentication, a strict 64 KiB JSON limit, validation, and out-of-order protection.
 - `GET /healthz` and SQLite-backed `GET /readyz` probes.
 - Latest metrics plus checkpointed UTC-minute history in pure-Go SQLite.
 - Startup/daily retention based on the persisted `settings.history_retention_days` value.
+- Non-root hardened systemd services, graceful signals, bounded inputs, TLS 1.2 minimum, and secret-safe transition logs.
 - Defensive HTTP timeouts, graceful `SIGINT`/`SIGTERM` shutdown, systemd hardening, and a Caddy TLS example.
 
 The server listens on `127.0.0.1:8080` by default. Do not expose its plain HTTP listener publicly: remote Agents must use TLS through Caddy, nginx, or another trusted reverse proxy.
 
 ## Build
 
-Go 1.26 or newer is required. Build both supported Linux targets:
+Go 1.26 or newer is required. Build both supported Linux targets for the central server and Agent:
 
 ```bash
 GO=/path/to/go bash scripts/build-server.sh
-ls -lh dist/tg-monitor-server-linux-*
+GO=/path/to/go bash scripts/build-agent.sh
+ls -lh dist/tg-monitor-*-linux-*
 ```
 
 For local development:
@@ -30,9 +33,10 @@ For local development:
 PATH=/tmp/go-toolchain/bin:$PATH go test ./...
 PATH=/tmp/go-toolchain/bin:$PATH go vet ./...
 CGO_ENABLED=0 /tmp/go-toolchain/bin/go build -o /tmp/tg-monitor-server ./cmd/tg-monitor-server
+CGO_ENABLED=0 /tmp/go-toolchain/bin/go build -o /tmp/tg-monitor-agent ./cmd/tg-monitor-agent
 ```
 
-## First Linux host deployment
+## Central server deployment
 
 The examples below assume a systemd-based Linux host and an amd64 binary. Use the arm64 artifact on ARM servers.
 
@@ -148,6 +152,58 @@ Inspect structured service logs without exposing Agent tokens:
 sudo journalctl -u tg-monitor --since '10 minutes ago' --no-pager
 ```
 
+## Linux Agent deployment
+
+Register each monitored machine on the central host with `tg-monitor-server server add` as shown above. Save both the returned `server_id` and the one-time Agent token before leaving the terminal.
+
+On the monitored host, choose `amd64` for Intel/AMD x86-64 or `arm64` for 64-bit ARM, then create the dedicated non-login account and install the matching artifact:
+
+```bash
+ARCH=amd64 # change to arm64 on 64-bit ARM
+sudo useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin tg-monitor-agent 2>/dev/null || true
+sudo install -o root -g root -m 0755 "dist/tg-monitor-agent-linux-${ARCH}" /usr/local/bin/tg-monitor-agent
+sudo install -d -o root -g root -m 0755 /etc/tg-monitor
+sudo install -o root -g root -m 0600 deploy/systemd/agent.env.example /etc/tg-monitor/agent.env
+sudo install -o root -g root -m 0644 deploy/systemd/tg-monitor-agent.service /etc/systemd/system/tg-monitor-agent.service
+sudoedit /etc/tg-monitor/agent.env
+```
+
+Set the public HTTPS origin and the saved one-time token in `agent.env`. The URL must not include `/api/v1/metrics`; the Agent appends it. Plain HTTP is accepted only for literal loopback addresses or `localhost`, never for traffic between hosts.
+
+Test two real samples and one authenticated report before enabling the daemon. This keeps the token out of shell arguments and history:
+
+```bash
+sudo sh -c 'set -a; . /etc/tg-monitor/agent.env; set +a; exec runuser -u tg-monitor-agent -- /usr/local/bin/tg-monitor-agent once'
+sudo systemctl daemon-reload
+sudo systemctl enable --now tg-monitor-agent
+sudo systemctl status --no-pager tg-monitor-agent
+```
+
+Verify ingestion from the central host, replacing `1` with the saved server ID:
+
+```bash
+sudo -u tg-monitor env TG_MONITOR_DATABASE_PATH=/var/lib/tg-monitor/monitor.db \
+  /usr/local/bin/tg-monitor-server metrics latest --server-id 1
+now_ms=$(date +%s%3N)
+from_ms=$((now_ms - 3600000))
+to_ms=$((now_ms + 60000))
+sudo -u tg-monitor env TG_MONITOR_DATABASE_PATH=/var/lib/tg-monitor/monitor.db \
+  /usr/local/bin/tg-monitor-server metrics history --server-id 1 --from-ms "${from_ms}" --to-ms "${to_ms}"
+```
+
+Inspect structured logs on both machines. Agent logs contain only transition classes, never tokens or report bodies:
+
+```bash
+sudo journalctl -u tg-monitor-agent --since '10 minutes ago' --no-pager
+sudo journalctl -u tg-monitor --since '10 minutes ago' --no-pager
+```
+
+For a repository-level real-process check, run the central server and Agent together on loopback. The last line must be `token_log_scan=clean`:
+
+```bash
+GO=/path/to/go bash scripts/smoke-agent.sh
+```
+
 ## TLS with Caddy
 
 Copy `deploy/caddy/Caddyfile.example` into the active Caddy configuration, replace `monitor.example.com` with a DNS name pointing at the host, and reload Caddy. The relevant route is:
@@ -170,14 +226,20 @@ sudo -u tg-monitor env TG_MONITOR_DATABASE_PATH=/var/lib/tg-monitor/monitor.db \
   /usr/local/bin/tg-monitor-server server list
 ```
 
-Rotate a compromised or lost token; the old token stops authenticating immediately:
+Rotate on the central host first and capture the replacement immediately; the old token stops authenticating as soon as this command succeeds:
 
 ```bash
 sudo -u tg-monitor env TG_MONITOR_DATABASE_PATH=/var/lib/tg-monitor/monitor.db \
   /usr/local/bin/tg-monitor-server server rotate-token --id 1
 ```
 
-The replacement token is also displayed exactly once.
+The replacement is displayed exactly once. Next, update the root-owned `/etc/tg-monitor/agent.env` on the monitored host, restart the Agent, and verify that fresh data reaches `metrics latest`:
+
+```bash
+sudoedit /etc/tg-monitor/agent.env
+sudo systemctl restart tg-monitor-agent
+sudo systemctl status --no-pager tg-monitor-agent
+```
 
 ## Upgrade and rollback
 
@@ -194,12 +256,26 @@ curl --fail http://127.0.0.1:8080/readyz
 
 If verification fails, stop the service, restore `/usr/local/bin/tg-monitor-server.previous`, and start it again. Restore the database backup only when release notes explicitly describe an incompatible migration; current migrations are forward-only and idempotent.
 
+Upgrade the Agent independently on each monitored host, preserving the previous executable:
+
+```bash
+ARCH=amd64 # change to arm64 when required
+sudo systemctl stop tg-monitor-agent
+sudo cp --preserve=mode,ownership /usr/local/bin/tg-monitor-agent /usr/local/bin/tg-monitor-agent.previous
+sudo install -o root -g root -m 0755 "dist/tg-monitor-agent-linux-${ARCH}" /usr/local/bin/tg-monitor-agent
+sudo systemctl start tg-monitor-agent
+sudo systemctl status --no-pager tg-monitor-agent
+```
+
+Confirm a new sample with the central `metrics latest` command. To roll back, stop `tg-monitor-agent`, restore `/usr/local/bin/tg-monitor-agent.previous`, start the service, and verify ingestion again. The Agent has no local database to migrate.
+
 ## Repository layout
 
-- `cmd/tg-monitor-server`: signal-aware executable.
+- `cmd/tg-monitor-server` and `cmd/tg-monitor-agent`: signal-aware executables.
+- `internal/linuxmetrics`, `internal/agentclient`, `internal/agentapp`, `internal/agentcmd`: Linux Agent layers.
 - `internal/httpapi`, `internal/auth`, `internal/monitoring`, `internal/serverapp`, `internal/servercmd`: central-server layers.
 - `internal/storage/sqlite`: migrations and persistence.
-- `deploy`: systemd and Caddy examples.
-- `scripts/build-server.sh`: reproducible Linux builds.
+- `deploy`: hardened systemd and Caddy examples.
+- `scripts/build-*.sh` and `scripts/smoke-agent.sh`: reproducible builds and real-process smoke verification.
 
 The project is licensed under the MIT License. See `NOTICE` for inspiration attribution.
