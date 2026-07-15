@@ -77,27 +77,30 @@ func (store *commandStoreStub) QueryMinuteSamples(_ context.Context, serverID, f
 }
 
 type commandHarness struct {
-	stdout       bytes.Buffer
-	stderr       bytes.Buffer
-	store        *commandStoreStub
-	openCalls    int
-	openedPath   string
-	serveCalls   int
-	servedConfig config.ServerRuntimeConfig
-	serveLogger  *slog.Logger
-	serveErr     error
-	config       config.ServerRuntimeConfig
+	stdout            bytes.Buffer
+	stderr            bytes.Buffer
+	store             *commandStoreStub
+	openCalls         int
+	openedPath        string
+	serveCalls        int
+	servedConfig      config.ApplicationRuntimeConfig
+	serveLogger       *slog.Logger
+	serveErr          error
+	serverConfig      config.ServerRuntimeConfig
+	applicationConfig config.ApplicationRuntimeConfig
 }
 
 func newCommandHarness() *commandHarness {
-	return &commandHarness{
+	harness := &commandHarness{
 		store: &commandStoreStub{},
-		config: config.ServerRuntimeConfig{
+		serverConfig: config.ServerRuntimeConfig{
 			DatabasePath:       "/tmp/test-monitor.db",
 			ListenAddr:         "127.0.0.1:9090",
 			CheckpointInterval: 25 * time.Second,
 		},
 	}
+	harness.applicationConfig = config.ApplicationRuntimeConfig{Server: harness.serverConfig}
+	return harness
 }
 
 func (harness *commandHarness) dependencies(randomByte byte) Dependencies {
@@ -105,15 +108,18 @@ func (harness *commandHarness) dependencies(randomByte byte) Dependencies {
 		Stdout: harnessOutput{buffer: &harness.stdout},
 		Stderr: &harness.stderr,
 		Random: bytes.NewReader(bytes.Repeat([]byte{randomByte}, 64)),
-		LoadConfig: func() (config.ServerRuntimeConfig, error) {
-			return harness.config, nil
+		LoadServerConfig: func() (config.ServerRuntimeConfig, error) {
+			return harness.serverConfig, nil
+		},
+		LoadApplicationConfig: func() (config.ApplicationRuntimeConfig, error) {
+			return harness.applicationConfig, nil
 		},
 		OpenStore: func(_ context.Context, path string) (Store, error) {
 			harness.openCalls++
 			harness.openedPath = path
 			return harness.store, nil
 		},
-		Serve: func(_ context.Context, cfg config.ServerRuntimeConfig, logger *slog.Logger) error {
+		Serve: func(_ context.Context, cfg config.ApplicationRuntimeConfig, logger *slog.Logger) error {
 			harness.serveCalls++
 			harness.servedConfig = cfg
 			harness.serveLogger = logger
@@ -146,7 +152,7 @@ func TestServerAddStoresOnlyHashAndPrintsTokenOnce(t *testing.T) {
 	if !strings.Contains(output, "server_id=10\n") || !strings.Contains(output, "agent_token="+raw+"\n") || strings.Count(output, raw) != 1 {
 		t.Fatalf("stdout = %q, want one server ID and one raw token", output)
 	}
-	if harness.openedPath != harness.config.DatabasePath || harness.store.closeCalls != 1 {
+	if harness.openedPath != harness.serverConfig.DatabasePath || harness.store.closeCalls != 1 {
 		t.Fatalf("store path/close = %q/%d", harness.openedPath, harness.store.closeCalls)
 	}
 }
@@ -219,7 +225,7 @@ func TestServeLoadsFocusedConfigWithoutOpeningCommandStore(t *testing.T) {
 	if err := Run(context.Background(), []string{"serve"}, harness.dependencies(0x01)); err != nil {
 		t.Fatalf("Run(serve) error = %v", err)
 	}
-	if harness.serveCalls != 1 || harness.servedConfig != harness.config || harness.serveLogger == nil {
+	if harness.serveCalls != 1 || harness.servedConfig != harness.applicationConfig || harness.serveLogger == nil {
 		t.Fatalf("serve calls/config/logger = %d/%#v/%v", harness.serveCalls, harness.servedConfig, harness.serveLogger)
 	}
 	if harness.openCalls != 0 {

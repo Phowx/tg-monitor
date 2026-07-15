@@ -12,12 +12,14 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/tg-monitor/tg-monitor/internal/auth"
 	"github.com/tg-monitor/tg-monitor/internal/config"
 	"github.com/tg-monitor/tg-monitor/internal/domain"
 	"github.com/tg-monitor/tg-monitor/internal/serverapp"
 	"github.com/tg-monitor/tg-monitor/internal/storage/sqlite"
+	"github.com/tg-monitor/tg-monitor/internal/telegramapi"
 )
 
 type Store interface {
@@ -29,19 +31,28 @@ type Store interface {
 	QueryMinuteSamples(context.Context, int64, int64, int64) ([]domain.MinuteSample, error)
 }
 
+type TelegramWebhookClient interface {
+	SetWebhook(context.Context, string, string) error
+	GetWebhookInfo(context.Context) (telegramapi.WebhookInfo, error)
+	DeleteWebhook(context.Context) error
+}
+
 type Dependencies struct {
-	Stdout     io.Writer
-	Stderr     io.Writer
-	Random     io.Reader
-	LoadConfig func() (config.ServerRuntimeConfig, error)
-	OpenStore  func(context.Context, string) (Store, error)
-	Serve      func(context.Context, config.ServerRuntimeConfig, *slog.Logger) error
+	Stdout                io.Writer
+	Stderr                io.Writer
+	Random                io.Reader
+	LoadServerConfig      func() (config.ServerRuntimeConfig, error)
+	LoadApplicationConfig func() (config.ApplicationRuntimeConfig, error)
+	LoadTelegramConfig    func() (config.TelegramRuntimeConfig, error)
+	OpenStore             func(context.Context, string) (Store, error)
+	Serve                 func(context.Context, config.ApplicationRuntimeConfig, *slog.Logger) error
+	NewTelegramClient     func(string, time.Duration) (TelegramWebhookClient, error)
 }
 
 func Run(ctx context.Context, args []string, dependencies Dependencies) error {
 	dependencies = dependencies.withDefaults()
 	if len(args) == 0 {
-		return errors.New("usage: tg-monitor-server <serve|server|metrics>")
+		return errors.New("usage: tg-monitor-server <serve|server|metrics|telegram>")
 	}
 
 	switch args[0] {
@@ -51,6 +62,8 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) error {
 		return runServer(ctx, args[1:], dependencies)
 	case "metrics":
 		return runMetrics(ctx, args[1:], dependencies)
+	case "telegram":
+		return runTelegram(ctx, args[1:], dependencies)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -60,12 +73,92 @@ func runServe(ctx context.Context, args []string, dependencies Dependencies) err
 	if len(args) != 0 {
 		return errors.New("usage: tg-monitor-server serve")
 	}
-	cfg, err := dependencies.LoadConfig()
+	cfg, err := dependencies.LoadApplicationConfig()
 	if err != nil {
 		return err
 	}
 	logger := slog.New(slog.NewJSONHandler(dependencies.Stderr, nil))
 	return dependencies.Serve(ctx, cfg, logger)
+}
+
+func runTelegram(ctx context.Context, args []string, dependencies Dependencies) error {
+	if len(args) == 0 {
+		return errors.New("usage: tg-monitor-server telegram <set-webhook|get-webhook|delete-webhook>")
+	}
+	switch args[0] {
+	case "set-webhook":
+		if len(args) != 1 {
+			return errors.New("usage: tg-monitor-server telegram set-webhook")
+		}
+		return runTelegramSetWebhook(ctx, dependencies)
+	case "get-webhook":
+		if len(args) != 1 {
+			return errors.New("usage: tg-monitor-server telegram get-webhook")
+		}
+		return runTelegramGetWebhook(ctx, dependencies)
+	case "delete-webhook":
+		if len(args) != 1 {
+			return errors.New("usage: tg-monitor-server telegram delete-webhook")
+		}
+		return runTelegramDeleteWebhook(ctx, dependencies)
+	default:
+		return fmt.Errorf("unknown telegram command %q", args[0])
+	}
+}
+
+func runTelegramSetWebhook(ctx context.Context, dependencies Dependencies) error {
+	cfg, err := dependencies.LoadTelegramConfig()
+	if err != nil {
+		return err
+	}
+	if err := config.ValidateWebhookPublicURL(cfg.PublicURL); err != nil {
+		return err
+	}
+	client, err := dependencies.NewTelegramClient(cfg.BotToken, cfg.HTTPTimeout)
+	if err != nil {
+		return err
+	}
+	if err := client.SetWebhook(ctx, cfg.PublicURL, cfg.WebhookSecret); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(dependencies.Stdout, "webhook=registered\n"); err != nil {
+		return fmt.Errorf("write webhook registration result: %w", err)
+	}
+	return nil
+}
+
+func runTelegramGetWebhook(ctx context.Context, dependencies Dependencies) error {
+	client, err := loadTelegramClient(dependencies)
+	if err != nil {
+		return err
+	}
+	info, err := client.GetWebhookInfo(ctx)
+	if err != nil {
+		return err
+	}
+	return encodeIndented(dependencies.Stdout, info)
+}
+
+func runTelegramDeleteWebhook(ctx context.Context, dependencies Dependencies) error {
+	client, err := loadTelegramClient(dependencies)
+	if err != nil {
+		return err
+	}
+	if err := client.DeleteWebhook(ctx); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(dependencies.Stdout, "webhook=deleted\n"); err != nil {
+		return fmt.Errorf("write webhook deletion result: %w", err)
+	}
+	return nil
+}
+
+func loadTelegramClient(dependencies Dependencies) (TelegramWebhookClient, error) {
+	cfg, err := dependencies.LoadTelegramConfig()
+	if err != nil {
+		return nil, err
+	}
+	return dependencies.NewTelegramClient(cfg.BotToken, cfg.HTTPTimeout)
 }
 
 func runServer(ctx context.Context, args []string, dependencies Dependencies) error {
@@ -208,7 +301,7 @@ func runMetricsHistory(ctx context.Context, args []string, dependencies Dependen
 }
 
 func withStore(ctx context.Context, dependencies Dependencies, operation func(Store) error) error {
-	cfg, err := dependencies.LoadConfig()
+	cfg, err := dependencies.LoadServerConfig()
 	if err != nil {
 		return err
 	}
@@ -244,8 +337,14 @@ func (dependencies Dependencies) withDefaults() Dependencies {
 	if dependencies.Random == nil {
 		dependencies.Random = rand.Reader
 	}
-	if dependencies.LoadConfig == nil {
-		dependencies.LoadConfig = config.LoadServerRuntimeFromEnv
+	if dependencies.LoadServerConfig == nil {
+		dependencies.LoadServerConfig = config.LoadServerRuntimeFromEnv
+	}
+	if dependencies.LoadApplicationConfig == nil {
+		dependencies.LoadApplicationConfig = config.LoadApplicationRuntimeFromEnv
+	}
+	if dependencies.LoadTelegramConfig == nil {
+		dependencies.LoadTelegramConfig = config.LoadTelegramRuntimeFromEnv
 	}
 	if dependencies.OpenStore == nil {
 		dependencies.OpenStore = func(ctx context.Context, path string) (Store, error) {
@@ -255,17 +354,22 @@ func (dependencies Dependencies) withDefaults() Dependencies {
 	if dependencies.Serve == nil {
 		dependencies.Serve = serve
 	}
+	if dependencies.NewTelegramClient == nil {
+		dependencies.NewTelegramClient = func(token string, timeout time.Duration) (TelegramWebhookClient, error) {
+			return telegramapi.New(token, timeout)
+		}
+	}
 	return dependencies
 }
 
-func serve(ctx context.Context, cfg config.ServerRuntimeConfig, logger *slog.Logger) error {
-	app, err := serverapp.New(ctx, config.ApplicationRuntimeConfig{Server: cfg}, logger)
+func serve(ctx context.Context, cfg config.ApplicationRuntimeConfig, logger *slog.Logger) error {
+	app, err := serverapp.New(ctx, cfg, logger)
 	if err != nil {
 		return err
 	}
-	listener, err := net.Listen("tcp", cfg.ListenAddr)
+	listener, err := net.Listen("tcp", cfg.Server.ListenAddr)
 	if err != nil {
-		return errors.Join(fmt.Errorf("listen on %s: %w", cfg.ListenAddr, err), app.Close(ctx))
+		return errors.Join(fmt.Errorf("listen on %s: %w", cfg.Server.ListenAddr, err), app.Close(ctx))
 	}
 	return app.Serve(ctx, listener)
 }
