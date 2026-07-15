@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tg-monitor/tg-monitor/internal/cloudflare"
 	"github.com/tg-monitor/tg-monitor/internal/domain"
 	"github.com/tg-monitor/tg-monitor/internal/websession"
 )
@@ -29,12 +30,21 @@ type Repository interface {
 	SetAlertPreference(context.Context, int64, bool) error
 }
 
+type DNSService interface {
+	Zones() []cloudflare.Zone
+	ListRecords(context.Context, string, int, int) (cloudflare.RecordPage, error)
+	CreateRecord(context.Context, string, cloudflare.CreateRecordInput) (cloudflare.Record, error)
+	UpdateRecord(context.Context, string, string, cloudflare.UpdateRecordInput) (cloudflare.Record, error)
+	DeleteRecord(context.Context, string, string, string, string) error
+}
+
 type Config struct {
 	PublicURL string
 }
 
 type Dependencies struct {
 	Repository Repository
+	DNS        DNSService
 	Random     io.Reader
 	Now        func() time.Time
 	Logger     *slog.Logger
@@ -42,6 +52,7 @@ type Dependencies struct {
 
 type handler struct {
 	repository Repository
+	dns        DNSService
 	random     io.Reader
 	now        func() time.Time
 	logger     *slog.Logger
@@ -67,6 +78,7 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	}
 	return &handler{
 		repository: dependencies.Repository,
+		dns:        dependencies.DNS,
 		random:     dependencies.Random,
 		now:        dependencies.Now,
 		logger:     dependencies.Logger,
@@ -114,6 +126,10 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 }
 
 func (handler *handler) serveAuthorized(writer http.ResponseWriter, request *http.Request, session domain.Session) {
+	if isDNSPath(request.URL.Path) {
+		handler.serveDNS(writer, request, session)
+		return
+	}
 	if request.URL.Path == "/api/v1/admin/overview" {
 		if !requireMethod(writer, request, http.MethodGet) {
 			return
@@ -199,6 +215,9 @@ func (handler *handler) writeUnauthorized(writer http.ResponseWriter) {
 }
 
 func routePattern(request *http.Request) string {
+	if pattern := dnsRoutePattern(request.URL.Path); pattern != "" {
+		return pattern
+	}
 	if request.URL.Path == "/api/v1/admin/overview" {
 		return "/api/v1/admin/overview"
 	}

@@ -19,6 +19,10 @@ var applicationEnvNames = []string{
 	"TG_MONITOR_SESSION_TTL",
 	"TG_MONITOR_INIT_DATA_MAX_AGE",
 	"TG_MONITOR_TELEGRAM_HTTP_TIMEOUT",
+	"TG_MONITOR_CLOUDFLARE_ENABLED",
+	"TG_MONITOR_CLOUDFLARE_API_TOKEN",
+	"TG_MONITOR_CLOUDFLARE_ZONES",
+	"TG_MONITOR_CLOUDFLARE_HTTP_TIMEOUT",
 }
 
 func clearApplicationEnv(t *testing.T) {
@@ -141,6 +145,66 @@ func TestLoadApplicationRuntimeFromEnvRejectsInvalidEnableFlag(t *testing.T) {
 			t.Setenv("TG_MONITOR_TELEGRAM_ENABLED", value)
 			if _, err := LoadApplicationRuntimeFromEnv(); err == nil {
 				t.Fatalf("LoadApplicationRuntimeFromEnv(%q) error = nil", value)
+			}
+		})
+	}
+}
+
+func TestLoadCloudflareRuntimeFromEnv(t *testing.T) {
+	clearApplicationEnv(t)
+	t.Setenv("TG_MONITOR_CLOUDFLARE_ENABLED", "true")
+	t.Setenv("TG_MONITOR_CLOUDFLARE_API_TOKEN", "CF-CONFIG-CANARY")
+	t.Setenv("TG_MONITOR_CLOUDFLARE_ZONES", `{"Second.Example.":"abcdefabcdefabcdefabcdefabcdefab","example.com":"0123456789abcdef0123456789abcdef"}`)
+	t.Setenv("TG_MONITOR_CLOUDFLARE_HTTP_TIMEOUT", "4s")
+
+	got, err := LoadCloudflareRuntimeFromEnv()
+	if err != nil {
+		t.Fatalf("LoadCloudflareRuntimeFromEnv() error = %v", err)
+	}
+	if got == nil || got.APIToken != "CF-CONFIG-CANARY" || got.HTTPTimeout != 4*time.Second {
+		t.Fatalf("Cloudflare runtime = %#v", got)
+	}
+	if len(got.Zones) != 2 || got.Zones[0].Name != "example.com" || got.Zones[1].Name != "second.example" {
+		t.Fatalf("Cloudflare zones = %#v", got.Zones)
+	}
+}
+
+func TestLoadCloudflareRuntimeFromEnvDisabledIgnoresSecrets(t *testing.T) {
+	clearApplicationEnv(t)
+	t.Setenv("TG_MONITOR_CLOUDFLARE_API_TOKEN", "ignored-canary")
+	t.Setenv("TG_MONITOR_CLOUDFLARE_ZONES", "not-json")
+	got, err := LoadCloudflareRuntimeFromEnv()
+	if err != nil || got != nil {
+		t.Fatalf("LoadCloudflareRuntimeFromEnv() = %#v, %v; want nil, nil", got, err)
+	}
+}
+
+func TestLoadCloudflareRuntimeFromEnvRejectsInvalidValuesWithoutSecretLeak(t *testing.T) {
+	tests := []struct {
+		name  string
+		flag  string
+		token string
+		zones string
+	}{
+		{name: "enable flag", flag: "yes", token: "CF-SECRET-CANARY", zones: `{"example.com":"0123456789abcdef0123456789abcdef"}`},
+		{name: "missing token", flag: "true", zones: `{"example.com":"0123456789abcdef0123456789abcdef"}`},
+		{name: "invalid JSON", flag: "true", token: "CF-SECRET-CANARY", zones: "{"},
+		{name: "empty zones", flag: "true", token: "CF-SECRET-CANARY", zones: "{}"},
+		{name: "invalid name", flag: "true", token: "CF-SECRET-CANARY", zones: `{"bad..example":"0123456789abcdef0123456789abcdef"}`},
+		{name: "invalid ID", flag: "true", token: "CF-SECRET-CANARY", zones: `{"example.com":"short"}`},
+		{name: "duplicate ID", flag: "true", token: "CF-SECRET-CANARY", zones: `{"a.example":"0123456789abcdef0123456789abcdef","b.example":"0123456789abcdef0123456789abcdef"}`},
+		{name: "normalized duplicate name", flag: "true", token: "CF-SECRET-CANARY", zones: `{"Example.com":"0123456789abcdef0123456789abcdef","example.com.":"abcdefabcdefabcdefabcdefabcdefab"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clearApplicationEnv(t)
+			t.Setenv("TG_MONITOR_CLOUDFLARE_ENABLED", test.flag)
+			t.Setenv("TG_MONITOR_CLOUDFLARE_API_TOKEN", test.token)
+			t.Setenv("TG_MONITOR_CLOUDFLARE_ZONES", test.zones)
+			if got, err := LoadCloudflareRuntimeFromEnv(); err == nil || got != nil {
+				t.Fatalf("LoadCloudflareRuntimeFromEnv() = %#v, %v; want nil, error", got, err)
+			} else if strings.Contains(err.Error(), "CF-SECRET-CANARY") {
+				t.Fatalf("error leaked token: %v", err)
 			}
 		})
 	}

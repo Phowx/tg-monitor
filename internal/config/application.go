@@ -1,18 +1,21 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
 
 type ApplicationRuntimeConfig struct {
-	Server   ServerRuntimeConfig
-	Telegram *TelegramRuntimeConfig
+	Server     ServerRuntimeConfig
+	Telegram   *TelegramRuntimeConfig
+	Cloudflare *CloudflareRuntimeConfig
 }
 
 type TelegramRuntimeConfig struct {
@@ -25,24 +28,120 @@ type TelegramRuntimeConfig struct {
 	HTTPTimeout      time.Duration
 }
 
+type CloudflareRuntimeConfig struct {
+	APIToken    string
+	Zones       []CloudflareZoneConfig
+	HTTPTimeout time.Duration
+}
+
+type CloudflareZoneConfig struct {
+	ID   string
+	Name string
+}
+
 func LoadApplicationRuntimeFromEnv() (ApplicationRuntimeConfig, error) {
 	server, err := LoadServerRuntimeFromEnv()
 	if err != nil {
 		return ApplicationRuntimeConfig{}, err
 	}
+	cloudflare, err := LoadCloudflareRuntimeFromEnv()
+	if err != nil {
+		return ApplicationRuntimeConfig{}, err
+	}
+	application := ApplicationRuntimeConfig{Server: server, Cloudflare: cloudflare}
 
 	switch strings.TrimSpace(os.Getenv("TG_MONITOR_TELEGRAM_ENABLED")) {
 	case "", "false":
-		return ApplicationRuntimeConfig{Server: server}, nil
+		return application, nil
 	case "true":
 		telegram, err := LoadTelegramRuntimeFromEnv()
 		if err != nil {
 			return ApplicationRuntimeConfig{}, err
 		}
-		return ApplicationRuntimeConfig{Server: server, Telegram: &telegram}, nil
+		application.Telegram = &telegram
+		return application, nil
 	default:
 		return ApplicationRuntimeConfig{}, errors.New("TG_MONITOR_TELEGRAM_ENABLED must be true or false")
 	}
+}
+
+func LoadCloudflareRuntimeFromEnv() (*CloudflareRuntimeConfig, error) {
+	switch strings.TrimSpace(os.Getenv("TG_MONITOR_CLOUDFLARE_ENABLED")) {
+	case "", "false":
+		return nil, nil
+	case "true":
+	default:
+		return nil, errors.New("TG_MONITOR_CLOUDFLARE_ENABLED must be true or false")
+	}
+
+	token := strings.TrimSpace(os.Getenv("TG_MONITOR_CLOUDFLARE_API_TOKEN"))
+	if token == "" {
+		return nil, errors.New("TG_MONITOR_CLOUDFLARE_API_TOKEN is required")
+	}
+	var configured map[string]string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(os.Getenv("TG_MONITOR_CLOUDFLARE_ZONES"))), &configured); err != nil || len(configured) == 0 {
+		return nil, errors.New("TG_MONITOR_CLOUDFLARE_ZONES must be a non-empty JSON object")
+	}
+	zones := make([]CloudflareZoneConfig, 0, len(configured))
+	seenIDs := make(map[string]struct{}, len(configured))
+	seenNames := make(map[string]struct{}, len(configured))
+	for rawName, rawID := range configured {
+		name, err := normalizeCloudflareZoneName(rawName)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := seenNames[name]; exists {
+			return nil, errors.New("TG_MONITOR_CLOUDFLARE_ZONES contains a duplicate zone name")
+		}
+		id := strings.TrimSpace(rawID)
+		if !isCloudflareZoneID(id) {
+			return nil, fmt.Errorf("TG_MONITOR_CLOUDFLARE_ZONES contains an invalid zone ID for %s", name)
+		}
+		if _, exists := seenIDs[id]; exists {
+			return nil, errors.New("TG_MONITOR_CLOUDFLARE_ZONES contains a duplicate zone ID")
+		}
+		seenIDs[id] = struct{}{}
+		seenNames[name] = struct{}{}
+		zones = append(zones, CloudflareZoneConfig{ID: id, Name: name})
+	}
+	sort.Slice(zones, func(i, j int) bool { return zones[i].Name < zones[j].Name })
+	timeout, err := durationFromEnv("TG_MONITOR_CLOUDFLARE_HTTP_TIMEOUT", 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return &CloudflareRuntimeConfig{APIToken: token, Zones: zones, HTTPTimeout: timeout}, nil
+}
+
+func normalizeCloudflareZoneName(raw string) (string, error) {
+	name := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
+	if len(name) == 0 || len(name) > 253 {
+		return "", errors.New("TG_MONITOR_CLOUDFLARE_ZONES contains an invalid zone name")
+	}
+	for _, label := range strings.Split(name, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return "", fmt.Errorf("TG_MONITOR_CLOUDFLARE_ZONES contains an invalid zone name %q", name)
+		}
+		for _, character := range label {
+			if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '-' {
+				continue
+			}
+			return "", fmt.Errorf("TG_MONITOR_CLOUDFLARE_ZONES contains an invalid zone name %q", name)
+		}
+	}
+	return name, nil
+}
+
+func isCloudflareZoneID(value string) bool {
+	if len(value) != 32 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func LoadTelegramRuntimeFromEnv() (TelegramRuntimeConfig, error) {

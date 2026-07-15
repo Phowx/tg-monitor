@@ -15,6 +15,7 @@ import (
 	"github.com/tg-monitor/tg-monitor/internal/adminapi"
 	"github.com/tg-monitor/tg-monitor/internal/alerting"
 	"github.com/tg-monitor/tg-monitor/internal/auth"
+	"github.com/tg-monitor/tg-monitor/internal/cloudflare"
 	"github.com/tg-monitor/tg-monitor/internal/config"
 	"github.com/tg-monitor/tg-monitor/internal/httpapi"
 	"github.com/tg-monitor/tg-monitor/internal/monitoring"
@@ -124,10 +125,18 @@ func newWithDependencies(ctx context.Context, cfg config.ApplicationRuntimeConfi
 		if err != nil {
 			return fail(fmt.Errorf("create Telegram routes: sessions: %w", err))
 		}
+		var dns adminapi.DNSService
+		if cfg.Cloudflare != nil {
+			dns, err = cloudflare.New(*cfg.Cloudflare)
+			if err != nil {
+				return fail(fmt.Errorf("create Cloudflare DNS client: %w", err))
+			}
+		}
 		admin, err := adminapi.NewHandler(adminapi.Config{
 			PublicURL: telegram.PublicURL,
 		}, adminapi.Dependencies{
 			Repository: store,
+			DNS:        dns,
 			Random:     dependencies.random,
 			Now:        dependencies.now,
 			Logger:     logger,

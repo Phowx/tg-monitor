@@ -11,9 +11,14 @@
     historyController: null,
     token: null,
     refreshing: false,
+    dnsZones: [],
+    dnsZoneID: "",
+    dnsPage: 1,
+    dnsTotalPages: 1,
+    dnsRecord: null,
   };
 
-  const views = ["bootstrap", "dashboard", "history", "servers", "settings"];
+  const views = ["bootstrap", "dashboard", "history", "servers", "dns", "settings"];
   const rangeMilliseconds = {
     "1h": 60 * 60 * 1000,
     "6h": 6 * 60 * 60 * 1000,
@@ -124,6 +129,10 @@
       void loadOverview({ quiet: true });
     } else if (error instanceof APIError && error.status === 409) {
       message = "数据已被其他操作更新，请刷新后重试。";
+    } else if (error instanceof APIError && error.status === 503) {
+      message = "Cloudflare DNS 尚未配置。";
+    } else if (error instanceof APIError && (error.status === 502 || error.status === 504)) {
+      message = "暂时无法连接 Cloudflare，请稍后重试。";
     }
     const target = byID("global-error");
     target.textContent = message;
@@ -291,6 +300,234 @@
     setField(form, "history_retention_days", state.overview.settings.history_retention_days);
     field(form, "alert_preference").checked = Boolean(state.overview.alerts_enabled);
     syncThresholdConstraint();
+  }
+
+  async function loadDNSZones() {
+    const refresh = byID("dns-refresh");
+    refresh.disabled = true;
+    clearError();
+    try {
+      const response = await request("/api/v1/admin/dns/zones");
+      const enabled = Boolean(response && response.enabled);
+      byID("dns-disabled").hidden = enabled;
+      byID("dns-content").hidden = !enabled;
+      state.dnsZones = enabled && Array.isArray(response.zones) ? response.zones : [];
+      const select = byID("dns-zone-select");
+      select.replaceChildren();
+      state.dnsZones.forEach((zone) => {
+        const option = element("option", "", zone.name);
+        option.value = zone.id;
+        select.append(option);
+      });
+      if (!enabled || state.dnsZones.length === 0) {
+        state.dnsZoneID = "";
+        renderDNSRecords({ records: [], page: 1, total_pages: 1, total_count: 0 });
+        return;
+      }
+      if (!state.dnsZones.some((zone) => zone.id === state.dnsZoneID)) {
+        state.dnsZoneID = state.dnsZones[0].id;
+      }
+      select.value = state.dnsZoneID;
+      await loadDNSRecords(1);
+    } catch (error) {
+      byID("dns-content").hidden = true;
+      showError(error);
+    } finally {
+      refresh.disabled = false;
+    }
+  }
+
+  async function loadDNSRecords(page) {
+    if (!state.dnsZoneID) return;
+    const refresh = byID("dns-refresh");
+    refresh.disabled = true;
+    clearError();
+    try {
+      const zoneID = encodeURIComponent(state.dnsZoneID);
+      const result = await request(`/api/v1/admin/dns/zones/${zoneID}/records?page=${page}&per_page=20`);
+      state.dnsPage = Number(result.page) || 1;
+      state.dnsTotalPages = Number(result.total_pages) || 1;
+      renderDNSRecords(result);
+    } catch (error) {
+      showError(error);
+    } finally {
+      refresh.disabled = false;
+    }
+  }
+
+  function renderDNSRecords(result) {
+    const records = Array.isArray(result.records) ? result.records : [];
+    const list = byID("dns-record-list");
+    list.replaceChildren();
+    records.forEach((record) => {
+      const card = element("article", "dns-record");
+      const body = element("div");
+      body.append(element("h3", "", `${record.type} · ${record.name}`));
+      body.append(element("p", "dns-record-value", record.content));
+      const meta = element("div", "dns-meta");
+      meta.append(element("span", "", `TTL ${formatDNSTTL(record.ttl)}`));
+      meta.append(element("span", "", formatDNSProxy(record)));
+      if (record.comment) meta.append(element("span", "", `备注：${record.comment}`));
+      if (record.modified_on) meta.append(element("span", "", `更新：${formatDNSModified(record.modified_on)}`));
+      body.append(meta);
+      const edit = element("button", "button button-secondary", "编辑");
+      edit.type = "button";
+      edit.addEventListener("click", () => openDNSEditor(record));
+      card.append(body, edit);
+      list.append(card);
+    });
+    const total = Number(result.total_count) || 0;
+    byID("dns-summary").textContent = `共 ${total} 条 A / AAAA / CNAME / TXT 记录`;
+    byID("dns-empty").hidden = records.length !== 0;
+    const totalPages = Number(result.total_pages) || 1;
+    const page = Number(result.page) || 1;
+    byID("dns-pagination").hidden = totalPages <= 1;
+    byID("dns-page-label").textContent = `第 ${page} / ${totalPages} 页`;
+    byID("dns-previous").disabled = page <= 1;
+    byID("dns-next").disabled = page >= totalPages;
+  }
+
+  function formatDNSTTL(value) {
+    return Number(value) === 1 ? "自动" : `${Number(value)} 秒`;
+  }
+
+  function formatDNSProxy(record) {
+    if (!record.proxiable) return "仅 DNS";
+    return record.proxied ? "已代理" : "仅 DNS";
+  }
+
+  function formatDNSModified(value) {
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toLocaleString() : "未知";
+  }
+
+  function openDNSCreator() {
+    state.dnsRecord = null;
+    const form = byID("dns-record-form");
+    form.reset();
+    field(form, "type").disabled = false;
+    setField(form, "type", "A");
+    setField(form, "ttl", 1);
+    setField(form, "delete_confirmation", "");
+    byID("dns-dialog-title").textContent = "新增 DNS 记录";
+    byID("dns-save").textContent = "确认新增";
+    byID("dns-delete-zone").hidden = true;
+    syncDNSForm();
+    byID("dns-dialog").showModal();
+  }
+
+  function openDNSEditor(record) {
+    state.dnsRecord = { ...record };
+    const form = byID("dns-record-form");
+    form.reset();
+    setField(form, "type", record.type);
+    field(form, "type").disabled = true;
+    setField(form, "name", record.name);
+    setField(form, "content", record.content);
+    setField(form, "ttl", record.ttl);
+    field(form, "proxied").checked = Boolean(record.proxied);
+    setField(form, "delete_confirmation", "");
+    byID("dns-dialog-title").textContent = `编辑 ${record.type} 记录`;
+    byID("dns-save").textContent = "确认保存";
+    byID("dns-delete-zone").hidden = false;
+    syncDNSForm();
+    byID("dns-dialog").showModal();
+  }
+
+  function closeDNSEditor() {
+    const dialog = byID("dns-dialog");
+    if (dialog.open) dialog.close();
+    state.dnsRecord = null;
+    byID("dns-record-form").reset();
+    byID("dns-preview").textContent = "";
+  }
+
+  function syncDNSForm() {
+    const form = byID("dns-record-form");
+    const type = field(form, "type").value;
+    const proxied = field(form, "proxied");
+    const ttl = field(form, "ttl");
+    const mayProxy = type !== "TXT" && (!state.dnsRecord || state.dnsRecord.proxiable);
+    proxied.disabled = !mayProxy;
+    if (!mayProxy) proxied.checked = false;
+    ttl.disabled = mayProxy && proxied.checked;
+    if (proxied.checked) ttl.value = "1";
+    const name = field(form, "name").value.trim() || "（未填写名称）";
+    const content = field(form, "content").value.trim() || "（未填写记录值）";
+    const proxyText = type === "TXT" ? "仅 DNS" : (proxied.checked ? "已代理" : "仅 DNS");
+    byID("dns-preview").textContent = `${type}  ${name}\n${content}\nTTL ${formatDNSTTL(ttl.value)} · ${proxyText}`;
+  }
+
+  function dnsPayload(form, includeType) {
+    const type = field(form, "type").value;
+    const payload = {
+      name: field(form, "name").value.trim(),
+      content: field(form, "content").value.trim(),
+      ttl: Number(field(form, "ttl").value),
+    };
+    if (includeType) payload.type = type;
+    if (type !== "TXT") payload.proxied = field(form, "proxied").checked;
+    return payload;
+  }
+
+  async function saveDNSRecord(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    syncDNSForm();
+    if (!form.reportValidity() || !state.dnsZoneID) return;
+    const editing = state.dnsRecord;
+    const payload = dnsPayload(form, !editing);
+    if (editing) payload.expected_modified_on = editing.modified_on;
+    setFormBusy(form, true);
+    clearError();
+    try {
+      const zoneID = encodeURIComponent(state.dnsZoneID);
+      const path = editing
+        ? `/api/v1/admin/dns/zones/${zoneID}/records/${encodeURIComponent(editing.id)}`
+        : `/api/v1/admin/dns/zones/${zoneID}/records`;
+      await request(path, {
+        method: editing ? "PATCH" : "POST",
+        body: JSON.stringify(payload),
+      });
+      closeDNSEditor();
+      await loadDNSRecords(editing ? state.dnsPage : 1);
+      setMessage(editing ? "DNS 记录已更新。" : "DNS 记录已创建。");
+    } catch (error) {
+      showError(error, "请检查记录名称、记录值、TTL 和代理设置。");
+    } finally {
+      setFormBusy(form, false);
+      field(form, "type").disabled = Boolean(state.dnsRecord);
+      syncDNSForm();
+    }
+  }
+
+  async function deleteDNSRecord() {
+    const record = state.dnsRecord;
+    if (!record || !state.dnsZoneID) return;
+    const form = byID("dns-record-form");
+    const confirmation = field(form, "delete_confirmation");
+    confirmation.setCustomValidity(confirmation.value === record.name ? "" : "请输入完整记录名称");
+    if (!confirmation.reportValidity()) return;
+    setFormBusy(form, true);
+    clearError();
+    try {
+      const zoneID = encodeURIComponent(state.dnsZoneID);
+      await request(`/api/v1/admin/dns/zones/${zoneID}/records/${encodeURIComponent(record.id)}`, {
+        method: "DELETE",
+        body: JSON.stringify({
+          confirm_name: confirmation.value,
+          expected_modified_on: record.modified_on,
+        }),
+      });
+      closeDNSEditor();
+      await loadDNSRecords(state.dnsPage);
+      setMessage("DNS 记录已删除。");
+    } catch (error) {
+      showError(error);
+    } finally {
+      confirmation.setCustomValidity("");
+      setFormBusy(form, false);
+    }
   }
 
   function syncThresholdConstraint() {
@@ -633,6 +870,7 @@
         const view = button.dataset.view;
         showView(view);
         if (view === "servers") renderAdminServers();
+        if (view === "dns") void loadDNSZones();
         if (view === "settings") syncSettingsForm();
       });
     });
@@ -648,6 +886,29 @@
     byID("server-dialog").addEventListener("close", () => { state.selectedServer = null; });
     byID("rotate-token").addEventListener("click", rotateToken);
     byID("delete-server").addEventListener("click", deleteServer);
+    byID("dns-refresh").addEventListener("click", () => {
+      if (state.dnsZoneID) void loadDNSRecords(state.dnsPage);
+      else void loadDNSZones();
+    });
+    byID("dns-zone-select").addEventListener("change", (event) => {
+      state.dnsZoneID = event.currentTarget.value;
+      void loadDNSRecords(1);
+    });
+    byID("dns-create").addEventListener("click", openDNSCreator);
+    byID("dns-previous").addEventListener("click", () => void loadDNSRecords(state.dnsPage - 1));
+    byID("dns-next").addEventListener("click", () => void loadDNSRecords(state.dnsPage + 1));
+    const dnsForm = byID("dns-record-form");
+    dnsForm.addEventListener("submit", saveDNSRecord);
+    dnsForm.addEventListener("input", syncDNSForm);
+    dnsForm.addEventListener("change", syncDNSForm);
+    byID("dns-dialog-close").addEventListener("click", closeDNSEditor);
+    byID("dns-cancel").addEventListener("click", closeDNSEditor);
+    byID("dns-delete").addEventListener("click", deleteDNSRecord);
+    byID("dns-dialog").addEventListener("close", () => {
+      state.dnsRecord = null;
+      dnsForm.reset();
+      byID("dns-preview").textContent = "";
+    });
     const settingsForm = byID("settings-form");
     settingsForm.addEventListener("submit", saveSettings);
     const offline = byID("offline-threshold");

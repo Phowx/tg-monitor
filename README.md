@@ -8,6 +8,7 @@ tg-monitor 是一个面向小型自托管环境的轻量服务器监控系统，
 - 在 WebApp 中查看实时状态、历史趋势和每分钟采样。
 - 管理服务器、分组、排序、启停状态及一次性 Agent 令牌。
 - 通过 Telegram 接收离线与恢复告警。
+- 在 WebApp 中管理 Cloudflare A、AAAA、CNAME、TXT 记录。
 - Telegram 输入框旁显示“打开监控面板”，无需先输入 `/app`。
 - SQLite WAL 持久化、耐久告警队列、进程重启后继续投递。
 - 非 root systemd 服务、严格文件权限和不记录秘密的结构化日志。
@@ -31,6 +32,7 @@ sudo bash scripts/manage.sh
 4. 卸载 Server
 5. 卸载 Agent
 6. 卸载全部组件
+7. 配置/验证 Cloudflare DNS
 
 安装过程中会逐项说明并要求手动选择，包括二进制来源、监听地址、Server URL、Telegram、Caddy、域名和 HTTPS 端口。Token 使用隐藏输入，执行前只显示脱敏摘要。
 
@@ -95,6 +97,28 @@ tg-monitor-server telegram get-webhook
 ```bash
 tg-monitor-server telegram reset-menu-button
 ```
+
+## Cloudflare DNS 管理
+
+在 Cloudflare 创建仅限目标 Zone 的 API Token，权限设置为：
+
+- Zone / Zone / Read
+- Zone / DNS / Edit
+
+随后运行一键管理脚本，选择“配置/验证 Cloudflare DNS”，按提示隐藏输入 Token，并逐个输入 Zone 域名和 32 位 Zone ID。脚本会先调用 Cloudflare 验证 Token 与 Zone，再重启 Server；任何验证或健康检查失败都会恢复旧配置。
+
+手工配置格式如下，环境文件必须保持 root:root、0600：
+
+    TG_MONITOR_CLOUDFLARE_ENABLED=true
+    TG_MONITOR_CLOUDFLARE_API_TOKEN=replace-with-scoped-api-token
+    TG_MONITOR_CLOUDFLARE_ZONES={"example.com":"replace-with-32-character-zone-id"}
+    TG_MONITOR_CLOUDFLARE_HTTP_TIMEOUT=10s
+
+验证命令：
+
+    sudo sh -c 'set -a; . /etc/tg-monitor/server.env; set +a; exec runuser --preserve-environment -u tg-monitor -- /usr/local/bin/tg-monitor-server dns verify'
+
+Token 不写入数据库、不发送到浏览器，也不会出现在安装摘要或应用日志中。WebApp 只显示白名单 Zone；创建和修改会显示最终预览，删除必须输入完整记录名。
 
 ## 手工 Server 部署
 

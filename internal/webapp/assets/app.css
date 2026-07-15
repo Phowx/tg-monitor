@@ -29,7 +29,7 @@ body {
   line-height: 1.5;
 }
 
-button, input { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button { color: inherit; }
 [hidden] { display: none !important; }
 
@@ -72,7 +72,7 @@ h3 { grid-column: 1 / -1; margin-bottom: 0; }
   top: 8px;
   z-index: 5;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 4px;
   padding: 5px;
   border: 1px solid var(--app-border);
@@ -204,7 +204,9 @@ dialog .dialog-card {
 .icon-button { width: 44px; padding: 0; font-size: 1.5rem; background: transparent; color: var(--app-text); }
 
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--app-accent) 62%, white);
   outline-offset: 3px;
 }
@@ -244,11 +246,48 @@ input {
   background: var(--app-bg);
   color: var(--app-text);
 }
+select,
+textarea {
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 11px;
+  border: 1px solid var(--app-border);
+  border-radius: 11px;
+  background: var(--app-bg);
+  color: var(--app-text);
+}
+textarea { resize: vertical; overflow-wrap: anywhere; }
 .check-row { display: flex; align-items: center; gap: 10px; min-height: 44px; }
 .check-row input { width: 22px; min-height: 22px; accent-color: var(--app-accent); }
 .admin-list { display: grid; gap: 10px; }
 .admin-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 18px; }
 .admin-row strong, .admin-row span { display: block; overflow-wrap: anywhere; }
+
+.dns-notice { padding: 22px; }
+.dns-notice p { margin-bottom: 0; color: var(--app-muted); }
+.dns-toolbar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px;
+}
+.dns-toolbar label { flex: 1 1 360px; }
+.dns-record-list { display: grid; gap: 10px; }
+.dns-record {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--app-border);
+  border-radius: 16px;
+  background: var(--app-surface);
+}
+.dns-record h3 { overflow-wrap: anywhere; }
+.dns-record-value { margin: 8px 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.dns-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; color: var(--app-muted); font-size: 0.78rem; }
+.pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 16px; }
+.dns-preview { min-height: 58px; padding: 12px; border-radius: 12px; background: var(--app-bg); overflow-wrap: anywhere; white-space: pre-wrap; }
 
 dialog {
   width: min(620px, calc(100% - 24px));
@@ -280,6 +319,10 @@ dialog .dialog-card { display: grid; gap: 15px; padding: 22px; overflow-y: auto;
   .range-picker { display: grid; grid-template-columns: repeat(4, 1fr); }
   .admin-row { align-items: stretch; flex-direction: column; }
   .admin-row .button { width: 100%; }
+  .dns-toolbar { align-items: stretch; flex-direction: column; }
+  .dns-toolbar .button { width: 100%; }
+  .dns-record { grid-template-columns: 1fr; }
+  .dns-record .button { width: 100%; }
 }
 
 @media (max-width: 320px) {

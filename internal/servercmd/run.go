@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tg-monitor/tg-monitor/internal/auth"
+	"github.com/tg-monitor/tg-monitor/internal/cloudflare"
 	"github.com/tg-monitor/tg-monitor/internal/config"
 	"github.com/tg-monitor/tg-monitor/internal/domain"
 	"github.com/tg-monitor/tg-monitor/internal/serverapp"
@@ -39,6 +40,11 @@ type TelegramWebhookClient interface {
 	DeleteWebhook(context.Context) error
 }
 
+type CloudflareVerifier interface {
+	Verify(context.Context) error
+	Zones() []cloudflare.Zone
+}
+
 type Dependencies struct {
 	Stdout                io.Writer
 	Stderr                io.Writer
@@ -46,15 +52,17 @@ type Dependencies struct {
 	LoadServerConfig      func() (config.ServerRuntimeConfig, error)
 	LoadApplicationConfig func() (config.ApplicationRuntimeConfig, error)
 	LoadTelegramConfig    func() (config.TelegramRuntimeConfig, error)
+	LoadCloudflareConfig  func() (*config.CloudflareRuntimeConfig, error)
 	OpenStore             func(context.Context, string) (Store, error)
 	Serve                 func(context.Context, config.ApplicationRuntimeConfig, *slog.Logger) error
 	NewTelegramClient     func(string, time.Duration) (TelegramWebhookClient, error)
+	NewCloudflareClient   func(config.CloudflareRuntimeConfig) (CloudflareVerifier, error)
 }
 
 func Run(ctx context.Context, args []string, dependencies Dependencies) error {
 	dependencies = dependencies.withDefaults()
 	if len(args) == 0 {
-		return errors.New("usage: tg-monitor-server <serve|server|metrics|telegram>")
+		return errors.New("usage: tg-monitor-server <serve|server|metrics|telegram|dns>")
 	}
 
 	switch args[0] {
@@ -66,9 +74,40 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) error {
 		return runMetrics(ctx, args[1:], dependencies)
 	case "telegram":
 		return runTelegram(ctx, args[1:], dependencies)
+	case "dns":
+		return runDNS(ctx, args[1:], dependencies)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runDNS(ctx context.Context, args []string, dependencies Dependencies) error {
+	if len(args) != 1 || args[0] != "verify" {
+		return errors.New("usage: tg-monitor-server dns verify")
+	}
+	runtime, err := dependencies.LoadCloudflareConfig()
+	if err != nil {
+		return err
+	}
+	if runtime == nil {
+		return errors.New("Cloudflare DNS is not enabled")
+	}
+	client, err := dependencies.NewCloudflareClient(*runtime)
+	if err != nil {
+		return err
+	}
+	if err := client.Verify(ctx); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(dependencies.Stdout, "cloudflare=verified\n"); err != nil {
+		return errors.New("write Cloudflare verification result")
+	}
+	for _, zone := range client.Zones() {
+		if _, err := fmt.Fprintf(dependencies.Stdout, "zone=%s status=ok\n", zone.Name); err != nil {
+			return errors.New("write Cloudflare zone verification result")
+		}
+	}
+	return nil
 }
 
 func runServe(ctx context.Context, args []string, dependencies Dependencies) error {
@@ -391,6 +430,9 @@ func (dependencies Dependencies) withDefaults() Dependencies {
 	if dependencies.LoadTelegramConfig == nil {
 		dependencies.LoadTelegramConfig = config.LoadTelegramRuntimeFromEnv
 	}
+	if dependencies.LoadCloudflareConfig == nil {
+		dependencies.LoadCloudflareConfig = config.LoadCloudflareRuntimeFromEnv
+	}
 	if dependencies.OpenStore == nil {
 		dependencies.OpenStore = func(ctx context.Context, path string) (Store, error) {
 			return sqlite.Open(ctx, path)
@@ -402,6 +444,11 @@ func (dependencies Dependencies) withDefaults() Dependencies {
 	if dependencies.NewTelegramClient == nil {
 		dependencies.NewTelegramClient = func(token string, timeout time.Duration) (TelegramWebhookClient, error) {
 			return telegramapi.New(token, timeout)
+		}
+	}
+	if dependencies.NewCloudflareClient == nil {
+		dependencies.NewCloudflareClient = func(runtime config.CloudflareRuntimeConfig) (CloudflareVerifier, error) {
+			return cloudflare.New(runtime)
 		}
 	}
 	return dependencies

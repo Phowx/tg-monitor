@@ -26,6 +26,8 @@ func TestAssetsHonorTelegramBootstrapAndSecretStorageContract(t *testing.T) {
 		"textContent", "createElementNS", "/api/v1/auth/session", "/api/v1/auth/telegram",
 		"/api/v1/auth/logout", "/api/v1/admin/overview", "/api/v1/admin/settings",
 		"/api/v1/admin/alert-preference", "/rotate-token", "/history?",
+		"/api/v1/admin/dns/zones", `method: editing ? "PATCH" : "POST"`,
+		`method: "DELETE"`,
 	} {
 		if !strings.Contains(javascript, required) {
 			t.Errorf("app.js missing %q", required)
@@ -43,6 +45,9 @@ func TestHTMLProvidesSemanticOperatorControls(t *testing.T) {
 		`name="offline_threshold_seconds"`, `name="alert_threshold_seconds"`,
 		`name="history_retention_days"`, `name="alert_preference"`,
 		`name="delete_confirmation"`, `autocomplete="off"`,
+		`id="dns-view"`, `id="dns-zone-select"`, `id="dns-dialog"`,
+		`value="A"`, `value="AAAA"`, `value="CNAME"`, `value="TXT"`,
+		`name="proxied"`,
 	} {
 		if !strings.Contains(html, required) {
 			t.Errorf("index.html missing %q", required)
@@ -55,7 +60,7 @@ func TestHTMLProvidesSemanticOperatorControls(t *testing.T) {
 
 func TestAssetsUseSimplifiedChineseOperatorCopy(t *testing.T) {
 	combined := readAsset(t, "assets/index.html") + readAsset(t, "assets/app.js")
-	for _, required := range []string{"运维控制台", "实时监控", "服务器管理", "监控策略", "Agent 令牌", "1 分钟负载"} {
+	for _, required := range []string{"运维控制台", "实时监控", "服务器管理", "DNS 管理", "Cloudflare", "监控策略", "Agent 令牌", "1 分钟负载"} {
 		if !strings.Contains(combined, required) {
 			t.Errorf("assets missing Chinese copy %q", required)
 		}

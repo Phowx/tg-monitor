@@ -21,6 +21,7 @@
   <nav id="primary-nav" class="primary-nav" aria-label="主要页面" hidden>
     <button type="button" data-view="dashboard" aria-current="page">概览</button>
     <button type="button" data-view="servers">服务器</button>
+    <button type="button" data-view="dns">DNS</button>
     <button type="button" data-view="settings">设置</button>
   </nav>
 
@@ -106,6 +107,33 @@
       <div id="admin-server-list" class="admin-list" aria-label="已配置服务器"></div>
     </section>
 
+    <section id="dns-view" class="view" aria-labelledby="dns-title" hidden>
+      <div class="section-heading">
+        <div><p class="eyebrow">Cloudflare</p><h2 id="dns-title">DNS 管理</h2></div>
+        <button id="dns-refresh" class="button button-secondary" type="button">刷新</button>
+      </div>
+      <div id="dns-disabled" class="panel dns-notice" hidden>
+        <h3>尚未启用 Cloudflare DNS</h3>
+        <p>请运行一键管理脚本，选择“配置/验证 Cloudflare DNS”，填写最小权限 API Token 和 Zone。</p>
+      </div>
+      <div id="dns-content" hidden>
+        <div class="panel dns-toolbar">
+          <label>管理区域
+            <select id="dns-zone-select" aria-label="Cloudflare Zone"></select>
+          </label>
+          <button id="dns-create" class="button" type="button">新增记录</button>
+        </div>
+        <p id="dns-summary" class="muted"></p>
+        <div id="dns-record-list" class="dns-record-list" aria-label="DNS 记录列表"></div>
+        <p id="dns-empty" class="empty-state" hidden>此 Zone 暂无支持的 DNS 记录。</p>
+        <div id="dns-pagination" class="pagination" hidden>
+          <button id="dns-previous" class="button button-secondary" type="button">上一页</button>
+          <span id="dns-page-label" aria-live="polite"></span>
+          <button id="dns-next" class="button button-secondary" type="button">下一页</button>
+        </div>
+      </div>
+    </section>
+
     <section id="settings-view" class="view" aria-labelledby="settings-title" hidden>
       <div class="section-heading">
         <div><p class="eyebrow">监控策略</p><h2 id="settings-title">监控设置</h2></div>
@@ -139,6 +167,56 @@
         <p>输入服务器名称以确认删除。历史和告警状态也会被移除。</p>
         <label>确认名称<input name="delete_confirmation" autocomplete="off"></label>
         <button id="delete-server" class="button button-danger" type="button">永久删除</button>
+      </fieldset>
+    </form>
+  </dialog>
+
+  <dialog id="dns-dialog" aria-labelledby="dns-dialog-title">
+    <form id="dns-record-form" class="dialog-card">
+      <div class="dialog-heading">
+        <h2 id="dns-dialog-title">新增 DNS 记录</h2>
+        <button id="dns-dialog-close" class="icon-button" type="button" aria-label="关闭">×</button>
+      </div>
+      <label>记录类型
+        <select name="type" required>
+          <option value="A">A</option>
+          <option value="AAAA">AAAA</option>
+          <option value="CNAME">CNAME</option>
+          <option value="TXT">TXT</option>
+        </select>
+      </label>
+      <label>记录名称
+        <input name="name" maxlength="253" required autocomplete="off" placeholder="@、api 或 api.example.com">
+      </label>
+      <label>记录值
+        <textarea name="content" maxlength="60000" required autocomplete="off" rows="4"></textarea>
+      </label>
+      <label>TTL
+        <select name="ttl" required>
+          <option value="1">自动</option>
+          <option value="60">1 分钟</option>
+          <option value="120">2 分钟</option>
+          <option value="300">5 分钟</option>
+          <option value="600">10 分钟</option>
+          <option value="1800">30 分钟</option>
+          <option value="3600">1 小时</option>
+          <option value="7200">2 小时</option>
+          <option value="18000">5 小时</option>
+          <option value="43200">12 小时</option>
+          <option value="86400">1 天</option>
+        </select>
+      </label>
+      <label class="check-row"><input name="proxied" type="checkbox"> 启用 Cloudflare 代理</label>
+      <output id="dns-preview" class="dns-preview" aria-live="polite"></output>
+      <div class="button-row">
+        <button id="dns-save" class="button" type="submit">确认新增</button>
+        <button id="dns-cancel" class="button button-secondary" type="button">取消</button>
+      </div>
+      <fieldset id="dns-delete-zone" class="danger-zone" hidden>
+        <legend>删除 DNS 记录</legend>
+        <p>输入完整记录名称以确认删除。此操作会立即提交到 Cloudflare。</p>
+        <label>确认名称<input name="delete_confirmation" autocomplete="off"></label>
+        <button id="dns-delete" class="button button-danger" type="button">永久删除</button>
       </fieldset>
     </form>
   </dialog>

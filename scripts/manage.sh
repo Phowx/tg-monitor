@@ -42,6 +42,7 @@ tg-monitor 一键管理脚本
 4. 卸载 Server
 5. 卸载 Agent
 6. 卸载全部组件
+7. 配置/验证 Cloudflare DNS
 0. 退出
 
 普通卸载保留配置和数据库；彻底卸载必须二次确认。
@@ -138,9 +139,19 @@ write_assignment() {
   printf '%s=%q\n' "$1" "$2"
 }
 
+read_env_value() {
+  local env_file="$1" name="$2"
+  (
+    # shellcheck disable=SC1090
+    source "$env_file"
+    printf '%s' "${!name:-}"
+  )
+}
+
 write_server_env_file() {
   local destination="$1" database="$2" listen="$3" telegram_enabled="$4"
   local public_url="$5" bot_token="$6" webhook_secret="$7" admin_ids="$8"
+  local cloudflare_enabled="${9:-false}" cloudflare_token="${10:-}" cloudflare_zones="${11:-{}}" cloudflare_timeout="${12:-10s}"
   {
     write_assignment TG_MONITOR_DATABASE_PATH "$database"
     write_assignment TG_MONITOR_LISTEN_ADDR "$listen"
@@ -155,7 +166,85 @@ write_server_env_file() {
       write_assignment TG_MONITOR_INIT_DATA_MAX_AGE "5m"
       write_assignment TG_MONITOR_TELEGRAM_HTTP_TIMEOUT "10s"
     fi
+    write_assignment TG_MONITOR_CLOUDFLARE_ENABLED "$cloudflare_enabled"
+    write_assignment TG_MONITOR_CLOUDFLARE_API_TOKEN "$cloudflare_token"
+    write_assignment TG_MONITOR_CLOUDFLARE_ZONES "$cloudflare_zones"
+    write_assignment TG_MONITOR_CLOUDFLARE_HTTP_TIMEOUT "$cloudflare_timeout"
   } | install_from_stdin "$destination" 0600
+}
+
+write_cloudflare_env_file() {
+  local destination="$1" enabled="$2" token="$3" zones="$4" timeout="$5"
+  {
+    awk '
+      !/^TG_MONITOR_CLOUDFLARE_ENABLED=/ &&
+      !/^TG_MONITOR_CLOUDFLARE_API_TOKEN=/ &&
+      !/^TG_MONITOR_CLOUDFLARE_ZONES=/ &&
+      !/^TG_MONITOR_CLOUDFLARE_HTTP_TIMEOUT=/
+    ' "$destination"
+    write_assignment TG_MONITOR_CLOUDFLARE_ENABLED "$enabled"
+    write_assignment TG_MONITOR_CLOUDFLARE_API_TOKEN "$token"
+    write_assignment TG_MONITOR_CLOUDFLARE_ZONES "$zones"
+    write_assignment TG_MONITOR_CLOUDFLARE_HTTP_TIMEOUT "$timeout"
+  } | install_from_stdin "$destination" 0600
+}
+
+validate_cloudflare_zone_name() {
+  local value="$1" label
+  value="${value%.}"
+  [[ -n "$value" && ${#value} -le 253 && "$value" != *".."* ]] || return 1
+  IFS='.' read -r -a labels <<<"$value"
+  for label in "${labels[@]}"; do
+    [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || return 1
+  done
+}
+
+validate_cloudflare_zone_id() {
+  [[ "$1" =~ ^[0-9A-Fa-f]{32}$ ]]
+}
+
+collect_cloudflare_zones() {
+  local json="{" separator="" name id seen_names="|" seen_ids="|" count=0
+  while true; do
+    name="$(prompt "Zone 域名（留空结束）：")"
+    [[ -n "$name" ]] || break
+    name="${name%.}"
+    name="${name,,}"
+    if ! validate_cloudflare_zone_name "$name"; then
+      warn "Zone 域名格式无效，请重新输入。"
+      continue
+    fi
+    if [[ "$seen_names" == *"|$name|"* ]]; then
+      warn "Zone 域名重复，请重新输入。"
+      continue
+    fi
+    id="$(prompt "Zone ID（32 位十六进制）：")"
+    if ! validate_cloudflare_zone_id "$id"; then
+      warn "Zone ID 格式无效，请重新输入。"
+      continue
+    fi
+    id="${id,,}"
+    if [[ "$seen_ids" == *"|$id|"* ]]; then
+      warn "Zone ID 重复，请重新输入。"
+      continue
+    fi
+    json+="${separator}\"${name}\":\"${id}\""
+    separator=","
+    seen_names+="$name|"
+    seen_ids+="$id|"
+    ((count += 1))
+    confirm "是否继续添加 Zone" || break
+  done
+  ((count > 0)) || die "至少需要配置一个 Zone。"
+  printf '%s}' "$json"
+}
+
+render_cloudflare_summary() {
+  local enabled="$1" token="$2" zones="$3"
+  printf 'Cloudflare DNS：%s\n' "$enabled"
+  if [[ "$enabled" == "true" ]]; then
+    printf 'API Token：%s\nZone 白名单：%s\n' "$([[ -n "$token" ]] && printf '已设置' || printf '未设置')" "$([[ "$zones" != "{}" ]] && printf '已设置' || printf '未设置')"
+  fi
 }
 
 write_agent_env_file() {
@@ -380,6 +469,76 @@ configure_telegram() {
   run_server_command telegram get-webhook >/dev/null
 }
 
+configure_cloudflare_interactive() {
+  local env_file current_enabled current_token current_zones current_timeout action enabled token zones timeout listen backup
+  env_file="$(root_path /etc/tg-monitor/server.env)"
+  [[ -f "$env_file" ]] || die "未找到 Server 配置，请先安装 Server。"
+  [[ -x "$(root_path /usr/local/bin/tg-monitor-server)" ]] || die "未找到 Server 程序，请先安装 Server。"
+  current_enabled="$(read_env_value "$env_file" TG_MONITOR_CLOUDFLARE_ENABLED)"
+  current_token="$(read_env_value "$env_file" TG_MONITOR_CLOUDFLARE_API_TOKEN)"
+  current_zones="$(read_env_value "$env_file" TG_MONITOR_CLOUDFLARE_ZONES)"
+  current_timeout="$(read_env_value "$env_file" TG_MONITOR_CLOUDFLARE_HTTP_TIMEOUT)"
+  listen="$(read_env_value "$env_file" TG_MONITOR_LISTEN_ADDR)"
+  current_enabled="${current_enabled:-false}"
+  current_zones="${current_zones:-{}}"
+  current_timeout="${current_timeout:-10s}"
+  listen="${listen:-127.0.0.1:8080}"
+
+  if [[ "$current_enabled" == "true" ]]; then
+    say "1) 更新并验证配置  2) 停用 Cloudflare DNS  0) 取消"
+    action="$(prompt_default "请选择" "1")"
+  else
+    say "1) 启用并配置 Cloudflare DNS  0) 取消"
+    action="$(prompt_default "请选择" "1")"
+  fi
+  case "$action" in
+    0) say "已取消。"; return 0 ;;
+    2)
+      [[ "$current_enabled" == "true" ]] || die "Cloudflare DNS 当前未启用。"
+      enabled="false"
+      token=""
+      zones="{}"
+      timeout="$current_timeout"
+      ;;
+    1)
+      enabled="true"
+      token="$(prompt_secret "Cloudflare API Token（留空保留现有值）：")"
+      token="${token:-$current_token}"
+      [[ -n "$token" ]] || die "Cloudflare API Token 不能为空。"
+      if [[ "$current_enabled" == "true" && "$current_zones" != "{}" ]] && confirm "是否保留现有 Zone 白名单"; then
+        zones="$current_zones"
+      else
+        say "依次输入允许管理的 Zone；Token 权限也应限制到这些 Zone。"
+        zones="$(collect_cloudflare_zones)" || return 1
+      fi
+      timeout="$(prompt_default "Cloudflare HTTP 超时" "$current_timeout")"
+      [[ "$timeout" =~ ^[1-9][0-9]*(ms|s|m)$ ]] || die "HTTP 超时格式无效，例如 10s。"
+      ;;
+    *) die "无效的选项。" ;;
+  esac
+
+  say "$(render_cloudflare_summary "$enabled" "$token" "$zones")"
+  confirm "确认写入并验证 Cloudflare DNS 配置" || { say "已取消。"; return 0; }
+  backup="$(mktemp)"
+  cp -p "$env_file" "$backup"
+  write_cloudflare_env_file "$env_file" "$enabled" "$token" "$zones" "$timeout"
+  if [[ "$enabled" == "true" ]] && ! run_server_command dns verify; then
+    install_from_stdin "$env_file" 0600 <"$backup"
+    rm -f "$backup"
+    die "Cloudflare 验证失败，已恢复旧配置。"
+    return 1
+  fi
+  if ! run_systemctl restart tg-monitor || ! verify_server_local "$listen"; then
+    install_from_stdin "$env_file" 0600 <"$backup"
+    run_systemctl restart tg-monitor || true
+    rm -f "$backup"
+    die "Server 重启或健康检查失败，已恢复旧配置。"
+    return 1
+  fi
+  rm -f "$backup"
+  say "Cloudflare DNS 配置已更新并生效。"
+}
+
 ensure_caddy() {
   command -v caddy >/dev/null && return 0
   [[ "$TEST_MODE" == "1" ]] && return 0
@@ -456,6 +615,7 @@ remove_caddy_config() {
 
 install_server_interactive() {
   local env_file listen database telegram_enabled="false" public_url="" bot_token="" webhook_secret="" admin_ids=""
+  local cloudflare_enabled="false" cloudflare_token="" cloudflare_zones="{}" cloudflare_timeout="10s"
   local configure_proxy="false" domain="" https_port="443" upstream_port preserve="false"
   env_file="$(root_path /etc/tg-monitor/server.env)"
   choose_binary server || return 1
@@ -475,8 +635,16 @@ install_server_interactive() {
       admin_ids="$(prompt "管理员 Telegram ID，多个用逗号分隔：")"
       [[ "$admin_ids" =~ ^[0-9]+(,[0-9]+)*$ ]] || die "管理员 ID 格式无效。"
       webhook_secret="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+      if confirm "是否启用 Cloudflare DNS 管理"; then
+        cloudflare_enabled="true"
+        cloudflare_token="$(prompt_secret "Cloudflare API Token：")"
+        [[ -n "$cloudflare_token" ]] || die "Cloudflare API Token 不能为空。"
+        say "依次输入允许管理的 Zone；Token 权限也应限制到这些 Zone。"
+        cloudflare_zones="$(collect_cloudflare_zones)" || return 1
+      fi
     fi
     say "$(render_server_summary "$listen" "$telegram_enabled" "$public_url" "$bot_token" "$webhook_secret")"
+    say "$(render_cloudflare_summary "$cloudflare_enabled" "$cloudflare_token" "$cloudflare_zones")"
     confirm "确认安装 Server" || { say "已取消。"; return 0; }
   fi
 
@@ -484,7 +652,7 @@ install_server_interactive() {
   install_binary "$SELECTED_BINARY" "$(root_path /usr/local/bin/tg-monitor-server)"
   write_server_unit
   if [[ "$preserve" != "true" ]]; then
-    write_server_env_file "$env_file" "$database" "$listen" "$telegram_enabled" "$public_url" "$bot_token" "$webhook_secret" "$admin_ids"
+    write_server_env_file "$env_file" "$database" "$listen" "$telegram_enabled" "$public_url" "$bot_token" "$webhook_secret" "$admin_ids" "$cloudflare_enabled" "$cloudflare_token" "$cloudflare_zones" "$cloudflare_timeout"
   fi
   run_systemctl daemon-reload
   run_systemctl enable --now tg-monitor
@@ -510,6 +678,11 @@ install_server_interactive() {
     configure_telegram || die "Telegram Webhook 或菜单按钮配置失败。"
   elif [[ "$configure_proxy" == "true" ]]; then
     verify_server_public "https://${domain}${https_port:+:${https_port}}" || warn "公网 HTTPS 检查失败，请检查 DNS 和防火墙。"
+  fi
+  if [[ "$cloudflare_enabled" == "true" ]] && ! run_server_command dns verify; then
+    write_cloudflare_env_file "$env_file" "false" "" "{}" "$cloudflare_timeout"
+    run_systemctl restart tg-monitor || true
+    die "Cloudflare 验证失败，已自动停用 DNS 管理；可通过主菜单重新配置。"
   fi
   say "Server 安装或升级完成。"
 }
@@ -659,6 +832,7 @@ main_menu() {
       4) uninstall_server_interactive ;;
       5) uninstall_agent_interactive ;;
       6) uninstall_all_interactive ;;
+      7) configure_cloudflare_interactive ;;
       0) say "已退出。"; return 0 ;;
       *) warn "无效选项，请重新输入。" ;;
     esac
