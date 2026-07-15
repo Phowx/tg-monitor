@@ -243,7 +243,7 @@ func (app *App) runRetentionWorker(ctx context.Context, workers *sync.WaitGroup)
 			if err != nil {
 				app.logger.Error("access cleanup failed", "error", err)
 			} else {
-				app.logger.Info("access cleanup completed", "sessions", cleaned.Sessions, "updates", cleaned.Updates)
+				app.logger.Info("access cleanup completed", "sessions", cleaned.Sessions, "updates", cleaned.Updates, "outbox", cleaned.Outbox)
 			}
 		}
 	}
