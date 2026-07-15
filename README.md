@@ -2,7 +2,7 @@
 
 `tg-monitor` is a self-hosted server monitoring project. The current release includes a deployable central server, a non-root Linux Agent, and optional private Telegram administrator access. Both binaries are CGO-free for amd64 and arm64.
 
-The Telegram webhook, private administrator commands, and signed Mini App session bootstrap are implemented. The browser WebApp UI and alert delivery remain subsequent phases.
+The Telegram webhook, private administrator commands, signed Mini App session bootstrap, and embedded operator WebApp are implemented. Offline alert evaluation and delivery remain a subsequent phase.
 
 ## Current capabilities
 
@@ -13,7 +13,7 @@ The Telegram webhook, private administrator commands, and signed Mini App sessio
 - Latest metrics plus checkpointed UTC-minute history in pure-Go SQLite.
 - Startup/daily retention based on the persisted `settings.history_retention_days` value.
 - Optional secret-authenticated Telegram webhook handling with update deduplication, administrator allowlisting, `/status`, `/help`, and alert preference commands.
-- Signed Telegram Mini App login, hash-only trusted sessions, bootstrap/logout endpoints, and explicit webhook administration commands.
+- Signed Telegram Mini App login, hash-only trusted sessions, monitoring/administration APIs, an embedded responsive operator UI, and explicit webhook administration commands.
 - Non-root hardened systemd services, graceful signals, bounded inputs, TLS 1.2 minimum, and secret-safe transition logs.
 - Defensive HTTP timeouts, graceful `SIGINT`/`SIGTERM` shutdown, systemd hardening, and a Caddy TLS example.
 
@@ -157,7 +157,7 @@ sudo journalctl -u tg-monitor --since '10 minutes ago' --no-pager
 
 ## Telegram administrator access
 
-Telegram integration is optional and remains disabled by default. It exposes the webhook and signed session endpoints through the same public origin as the readiness and Agent APIs. Keep the application listener on loopback and publish the complete origin through TLS; do not strip `/telegram/webhook` or `/api/v1/auth/*` in the reverse proxy.
+Telegram integration is optional and remains disabled by default. It exposes the webhook, signed session endpoints, embedded `/app*` assets, and authenticated `/api/v1/admin/*` operator API through the same public origin as the readiness and Agent APIs. Keep the application listener on loopback and publish the complete origin through TLS; the reverse proxy must preserve every path.
 
 ### 1. Create the bot and prepare secrets
 
@@ -207,7 +207,18 @@ sudo sh -c 'set -a; . /etc/tg-monitor/server.env; set +a; exec runuser --preserv
 
 The commands print `webhook=registered` and safe webhook metadata. They do not open SQLite or print the bot token, webhook secret, or Telegram's last error description.
 
-Open a private chat with the bot from an allowlisted account and send `/status`. Group chats, channel posts, missing senders, and non-administrators are acknowledged without command side effects. `/help`, `/alerts_on`, and `/alerts_off` are also available.
+Configure the persistent Mini App menu in `@BotFather` after the public TLS endpoint is live:
+
+```text
+/setmenubutton
+<select the bot>
+Button text: Open tg-monitor
+Web App URL: ${TG_MONITOR_PUBLIC_URL}/app/
+```
+
+Replace the variable with the same HTTPS origin configured on the server. The trailing `/app/` is required; do not configure an internal loopback URL.
+
+Open a private chat with the bot from an allowlisted account and send `/status`, then send `/app` and open the returned Web App button. Group chats, channel posts, missing senders, and non-administrators are acknowledged without command side effects. `/help`, `/alerts_on`, and `/alerts_off` are also available.
 
 ### 3. Verify the local workflow and logs
 
@@ -219,9 +230,25 @@ GO=/path/to/go bash scripts/smoke-telegram.sh
 
 ```text
 telegram_webhook=ok duplicate=ok
+telegram_webapp=ok
 telegram_session=ok logout=ok
 telegram_sigterm=clean secret_log_scan=clean
 ```
+
+Verify the public shell and its security policy independently of Telegram authentication:
+
+```bash
+TG_MONITOR_PUBLIC_URL=https://monitor.example.com
+curl --fail --silent --show-error --dump-header /tmp/tg-monitor-webapp.headers \
+  --output /tmp/tg-monitor-webapp.html "${TG_MONITOR_PUBLIC_URL}/app/"
+grep -Fi 'Content-Security-Policy:' /tmp/tg-monitor-webapp.headers
+grep -F '/app/app.js' /tmp/tg-monitor-webapp.html
+rm -f /tmp/tg-monitor-webapp.headers /tmp/tg-monitor-webapp.html
+```
+
+The response must include the documented `Content-Security-Policy` and reference same-origin CSS/JavaScript assets. A request to plain `/app` should redirect permanently to `/app/`.
+
+Then open the BotFather menu button or the `/app` reply from an allowlisted private chat. In browser developer tools, confirm the signed bootstrap completes, `GET /api/v1/admin/overview` returns 200, the server list renders, and requests remain on the configured origin. Do not copy session cookies or Telegram init data into the shell.
 
 After production verification, scan the journal for a token or secret canary without putting it in shell history:
 
@@ -237,7 +264,7 @@ unset CANARY
 
 ### 4. Disable or roll back Telegram
 
-To stop new Telegram traffic while preserving core monitoring, set `TG_MONITOR_TELEGRAM_ENABLED=false` and restart; readiness and Agent ingestion remain available. Optionally delete the remote webhook while the token values are still present:
+To stop new Telegram traffic while preserving core monitoring, set `TG_MONITOR_TELEGRAM_ENABLED=false` and restart. This removes the webhook, auth endpoints, embedded `/app*` assets, and `/api/v1/admin/*` routes while readiness and Agent ingestion remain available. Optionally delete the remote webhook while the token values are still present:
 
 ```bash
 sudo sh -c 'set -a; . /etc/tg-monitor/server.env; set +a; exec runuser --preserve-environment -u tg-monitor -- /usr/local/bin/tg-monitor-server telegram delete-webhook'
@@ -245,6 +272,8 @@ sudoedit /etc/tg-monitor/server.env # set TG_MONITOR_TELEGRAM_ENABLED=false
 sudo systemctl restart tg-monitor
 curl --fail --silent http://127.0.0.1:8080/readyz
 ```
+
+After restart, verify `/readyz` and Agent ingestion still succeed while `/app/` and `/api/v1/admin/overview` return 404. This WebApp rollback requires no database migration or data deletion.
 
 Schema version 2 is additive: it only adds the Telegram update-deduplication table and index; existing server, metric, session, and preference data are not rewritten. An older binary that supports only schema version 1 still rejects a version-2 database, so restore the pre-upgrade database backup when rolling the binary back across this version boundary.
 

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tg-monitor/tg-monitor/internal/adminapi"
 	"github.com/tg-monitor/tg-monitor/internal/auth"
 	"github.com/tg-monitor/tg-monitor/internal/config"
 	"github.com/tg-monitor/tg-monitor/internal/httpapi"
@@ -20,6 +21,7 @@ import (
 	"github.com/tg-monitor/tg-monitor/internal/storage/sqlite"
 	"github.com/tg-monitor/tg-monitor/internal/telegramapi"
 	"github.com/tg-monitor/tg-monitor/internal/telegrambot"
+	"github.com/tg-monitor/tg-monitor/internal/webapp"
 )
 
 const (
@@ -113,12 +115,27 @@ func newWithDependencies(ctx context.Context, cfg config.ApplicationRuntimeConfi
 		if err != nil {
 			return fail(fmt.Errorf("create Telegram routes: sessions: %w", err))
 		}
+		admin, err := adminapi.NewHandler(adminapi.Config{
+			PublicURL: telegram.PublicURL,
+		}, adminapi.Dependencies{
+			Repository: store,
+			Random:     dependencies.random,
+			Now:        dependencies.now,
+			Logger:     logger,
+		})
+		if err != nil {
+			return fail(fmt.Errorf("create Telegram routes: admin API: %w", err))
+		}
+		miniApp := webapp.NewHandler()
 
 		mux := http.NewServeMux()
 		mux.Handle("/telegram/webhook", webhook)
 		mux.Handle("/api/v1/auth/telegram", sessions)
 		mux.Handle("/api/v1/auth/session", sessions)
 		mux.Handle("/api/v1/auth/logout", sessions)
+		mux.Handle("/api/v1/admin/", admin)
+		mux.Handle("/app", miniApp)
+		mux.Handle("/app/", miniApp)
 		mux.Handle("/", core)
 		handler = mux
 	}

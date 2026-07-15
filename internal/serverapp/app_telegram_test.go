@@ -221,6 +221,50 @@ func TestAppServeComposesTelegramRoutesWithSharedStore(t *testing.T) {
 		t.Fatalf("GET session status = %d, want 200", sessionResponse.StatusCode)
 	}
 
+	appResponse, err := client.Get(baseURL + "/app/")
+	if err != nil {
+		t.Fatalf("GET /app/ error = %v", err)
+	}
+	appBody, _ := io.ReadAll(appResponse.Body)
+	appResponse.Body.Close()
+	if appResponse.StatusCode != http.StatusOK || appResponse.Header.Get("Content-Security-Policy") == "" {
+		t.Fatalf("GET /app/ = %d CSP=%q body=%q", appResponse.StatusCode, appResponse.Header.Get("Content-Security-Policy"), appBody)
+	}
+	for _, asset := range []string{"/app/app.css", "/app/app.js"} {
+		if !bytes.Contains(appBody, []byte(asset)) {
+			t.Fatalf("GET /app/ body missing %q", asset)
+		}
+	}
+
+	overviewRequest, _ := http.NewRequest(http.MethodGet, baseURL+"/api/v1/admin/overview", nil)
+	overviewRequest.AddCookie(sessionCookie)
+	overviewResponse, err := client.Do(overviewRequest)
+	if err != nil {
+		t.Fatalf("GET overview error = %v", err)
+	}
+	overviewBody, _ := io.ReadAll(overviewResponse.Body)
+	overviewResponse.Body.Close()
+	if overviewResponse.StatusCode != http.StatusOK || !bytes.Contains(overviewBody, []byte(`"name":"integration-server"`)) || !bytes.Contains(overviewBody, []byte(`"cpu_pct":25`)) {
+		t.Fatalf("GET overview = %d body=%q", overviewResponse.StatusCode, overviewBody)
+	}
+
+	fromMS := now.Add(-time.Hour).UnixMilli()
+	toMS := now.Add(time.Second).UnixMilli()
+	historyRequest, _ := http.NewRequest(
+		http.MethodGet,
+		baseURL+"/api/v1/admin/servers/"+strconv.FormatInt(server.ID, 10)+"/history?from_ms="+strconv.FormatInt(fromMS, 10)+"&to_ms="+strconv.FormatInt(toMS, 10),
+		nil,
+	)
+	historyRequest.AddCookie(sessionCookie)
+	historyResponse, err := client.Do(historyRequest)
+	if err != nil {
+		t.Fatalf("GET history error = %v", err)
+	}
+	historyBody, _ := io.ReadAll(historyResponse.Body)
+	historyResponse.Body.Close()
+	if historyResponse.StatusCode != http.StatusOK || !bytes.Contains(historyBody, []byte(`"name":"integration-server"`)) {
+		t.Fatalf("GET history = %d body=%q", historyResponse.StatusCode, historyBody)
+	}
 	logoutRequest, _ := http.NewRequest(http.MethodPost, baseURL+"/api/v1/auth/logout", nil)
 	logoutRequest.AddCookie(sessionCookie)
 	logoutResponse, err := client.Do(logoutRequest)

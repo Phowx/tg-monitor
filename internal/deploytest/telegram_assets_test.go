@@ -73,11 +73,38 @@ func TestTelegramSmokeAssetExercisesRealSecurityBoundaries(t *testing.T) {
 		"grep -R -F",
 		"telegram_webhook=ok duplicate=ok",
 		"telegram_session=ok logout=ok",
+		"telegram_webapp=ok",
+		"/app/",
+		"/app/app.css",
+		"/app/app.js",
+		"Content-Security-Policy",
+		"/api/v1/admin/overview",
+		"/history?from_ms=",
+		`"text":"/app"`,
+		"rotated_token",
 		"telegram_sigterm=clean secret_log_scan=clean",
 	} {
 		if !strings.Contains(contents, required) {
 			t.Errorf("smoke-telegram.sh missing %q", required)
 		}
+	}
+}
+
+func TestTelegramSmokeHeaderChecksUseAnchoredRegex(t *testing.T) {
+	root := telegramRepositoryRoot(t)
+	contents := readTelegramAsset(t, root, "scripts/smoke-telegram.sh")
+	for _, required := range []string{
+		`grep -iq '^Content-Security-Policy:'`,
+		`grep -iq '^Cache-Control: no-store'`,
+		`grep -iq '^Content-Type: text/css; charset=utf-8'`,
+		`grep -iq '^Content-Type: text/javascript; charset=utf-8'`,
+	} {
+		if !strings.Contains(contents, required) {
+			t.Errorf("smoke-telegram.sh missing anchored header check %q", required)
+		}
+	}
+	if strings.Contains(contents, `grep -Fiq '^`) {
+		t.Fatal("smoke-telegram.sh treats the line anchor as a fixed-string character")
 	}
 }
 
@@ -96,14 +123,30 @@ func TestTelegramRunbookCoversDeploymentVerificationAndRollback(t *testing.T) {
 		"TG_MONITOR_TELEGRAM_ENABLED=false",
 		"telegram delete-webhook",
 		"Schema version 2 is additive",
-		"browser WebApp UI and alert delivery remain subsequent phases",
+		"${TG_MONITOR_PUBLIC_URL}/app/",
+		"/setmenubutton",
+		"Content-Security-Policy",
+		"/api/v1/admin/overview",
+		"telegram_webapp=ok",
 	} {
 		if !strings.Contains(contents, required) {
 			t.Errorf("README.md missing Telegram runbook contract %q", required)
 		}
 	}
+	wantTranscript := strings.Join([]string{
+		"telegram_webhook=ok duplicate=ok",
+		"telegram_webapp=ok",
+		"telegram_session=ok logout=ok",
+		"telegram_sigterm=clean secret_log_scan=clean",
+	}, "\n")
+	if !strings.Contains(contents, wantTranscript) {
+		t.Errorf("README.md smoke transcript is not in execution order")
+	}
 	if strings.Contains(contents, "The Telegram Bot/WebApp, alert delivery, and browser UI remain planned") {
 		t.Fatal("README.md still describes all Telegram capability as planned")
+	}
+	if strings.Contains(contents, "browser WebApp UI and alert delivery remain subsequent phases") {
+		t.Fatal("README.md still describes the implemented browser WebApp UI as planned")
 	}
 }
 

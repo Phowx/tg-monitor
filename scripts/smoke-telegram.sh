@@ -21,6 +21,7 @@ cleanup() {
     rm -rf "$work_dir"
 }
 trap cleanup EXIT
+trap 'status=$?; printf "smoke_error_line=%s status=%s\n" "$LINENO" "$status" >&2; exit "$status"' ERR
 
 choose_port() {
     local start port offset
@@ -62,6 +63,15 @@ server_log="$work_dir/server.log"
 proxy_log="$work_dir/fake-telegram-proxy.log"
 database="$work_dir/monitor.db"
 cookie_jar="$work_dir/cookies.txt"
+app_html="$work_dir/app.html"
+app_headers="$work_dir/app-headers.txt"
+css_asset="$work_dir/app.css"
+css_headers="$work_dir/css-headers.txt"
+js_asset="$work_dir/app.js"
+js_headers="$work_dir/js-headers.txt"
+overview_json="$work_dir/overview.json"
+history_json="$work_dir/history.json"
+rotate_json="$work_dir/rotate.json"
 ca_certificate="$work_dir/fake-telegram-ca.pem"
 proxy_stats="$work_dir/fake-telegram-stats.txt"
 fake_source="$work_dir/fake-telegram-proxy.go"
@@ -106,10 +116,12 @@ import (
 
 type recorder struct {
 	mu          sync.Mutex
-	count       int
+	statusCount int
+	webAppCount int
 	statsPath   string
 	token       string
 	description string
+	webAppURL   string
 }
 
 func main() {
@@ -127,8 +139,9 @@ func main() {
 		statsPath:   os.Getenv("FAKE_STATS_PATH"),
 		token:       os.Getenv("FAKE_EXPECTED_BOT_TOKEN"),
 		description: os.Getenv("FAKE_RESPONSE_DESCRIPTION"),
+		webAppURL:   os.Getenv("FAKE_EXPECTED_WEBAPP_URL"),
 	}
-	if recorder.token == "" || recorder.statsPath == "" || recorder.description == "" {
+	if recorder.token == "" || recorder.statsPath == "" || recorder.description == "" || recorder.webAppURL == "" {
 		os.Exit(2)
 	}
 	if err := recorder.writeStats(); err != nil {
@@ -185,17 +198,35 @@ func (recorder *recorder) serveTLS(connection net.Conn, certificate tls.Certific
 		}
 		body, err := io.ReadAll(io.LimitReader(request.Body, 1<<20))
 		request.Body.Close()
-		valid := err == nil && request.Method == http.MethodPost && request.URL.Path == "/bot"+recorder.token+"/sendMessage"
 		var payload struct {
-			ChatID int64  `json:"chat_id"`
-			Text   string `json:"text"`
+			ChatID     int64  `json:"chat_id"`
+			Text       string `json:"text"`
+			ReplyMarkup struct {
+				InlineKeyboard [][]struct {
+					Text   string `json:"text"`
+					WebApp struct {
+						URL string `json:"url"`
+					} `json:"web_app"`
+				} `json:"inline_keyboard"`
+			} `json:"reply_markup"`
 		}
-		if json.Unmarshal(body, &payload) != nil || payload.ChatID != 4242 || !strings.Contains(payload.Text, "smoke-host") {
-			valid = false
+		baseValid := err == nil && request.Method == http.MethodPost && request.URL.Path == "/bot"+recorder.token+"/sendMessage"
+		decodeErr := json.Unmarshal(body, &payload)
+		statusValid := baseValid && decodeErr == nil && payload.ChatID == 4242 && strings.Contains(payload.Text, "smoke-host")
+		webAppValid := false
+		if baseValid && decodeErr == nil && payload.ChatID == 4242 && len(payload.ReplyMarkup.InlineKeyboard) == 1 && len(payload.ReplyMarkup.InlineKeyboard[0]) == 1 {
+			button := payload.ReplyMarkup.InlineKeyboard[0][0]
+			webAppValid = payload.Text == "Open the tg-monitor operator app." && button.Text == "Open tg-monitor" && button.WebApp.URL == recorder.webAppURL
 		}
+		valid := statusValid || webAppValid
 		if valid {
 			recorder.mu.Lock()
-			recorder.count++
+			if statusValid {
+				recorder.statusCount++
+			}
+			if webAppValid {
+				recorder.webAppCount++
+			}
 			_ = recorder.writeStatsLocked()
 			recorder.mu.Unlock()
 		}
@@ -219,7 +250,8 @@ func (recorder *recorder) writeStats() error {
 }
 
 func (recorder *recorder) writeStatsLocked() error {
-	return os.WriteFile(recorder.statsPath, []byte(fmt.Sprintf("sendMessage=%d\n", recorder.count)), 0o600)
+	contents := fmt.Sprintf("statusMessage=%d\nwebAppMessage=%d\n", recorder.statusCount, recorder.webAppCount)
+	return os.WriteFile(recorder.statsPath, []byte(contents), 0o600)
 }
 
 func testCertificate() (tls.Certificate, []byte, error) {
@@ -299,6 +331,7 @@ CGO_ENABLED=0 "$GO" build -o "$signer_binary" "$signer_source" >/dev/null
 
 FAKE_STATS_PATH="$proxy_stats" \
 FAKE_EXPECTED_BOT_TOKEN="$bot_token" \
+FAKE_EXPECTED_WEBAPP_URL="http://127.0.0.1:$server_port/app/" \
 FAKE_RESPONSE_DESCRIPTION="$fake_description" \
     "$fake_binary" "$proxy_port" "$ca_certificate" >"$proxy_log" 2>&1 &
 proxy_pid=$!
@@ -334,6 +367,21 @@ TG_MONITOR_TELEGRAM_HTTP_TIMEOUT=2s \
 server_pid=$!
 wait_for_port "$server_port"
 
+curl --fail --silent --show-error --dump-header "$app_headers" --output "$app_html" \
+    "http://127.0.0.1:$server_port/app/"
+grep -Fq 'href="/app/app.css"' "$app_html"
+grep -Fq 'src="/app/app.js"' "$app_html"
+grep -iq '^Content-Security-Policy:' "$app_headers"
+grep -iq '^Cache-Control: no-store' "$app_headers"
+curl --fail --silent --show-error --dump-header "$css_headers" --output "$css_asset" \
+    "http://127.0.0.1:$server_port/app/app.css"
+grep -iq '^Content-Type: text/css; charset=utf-8' "$css_headers"
+grep -iq '^Cache-Control: public, max-age=31536000, immutable' "$css_headers"
+curl --fail --silent --show-error --dump-header "$js_headers" --output "$js_asset" \
+    "http://127.0.0.1:$server_port/app/app.js"
+grep -iq '^Content-Type: text/javascript; charset=utf-8' "$js_headers"
+grep -iq '^Cache-Control: public, max-age=31536000, immutable' "$js_headers"
+
 # Send the same JSON "update_id":9001 twice to prove record-first deduplication.
 webhook_body="{\"update_id\":9001,\"message\":{\"from\":{\"id\":42},\"chat\":{\"id\":4242,\"type\":\"private\"},\"text\":\"$message_text\"}}"
 for _ in 1 2; do
@@ -346,10 +394,23 @@ for _ in 1 2; do
         exit 1
     fi
 done
-if ! grep -Fxq 'sendMessage=1' "$proxy_stats"; then
+if ! grep -Fxq 'statusMessage=1' "$proxy_stats"; then
     exit 1
 fi
 printf '%s\n' 'telegram_webhook=ok duplicate=ok'
+
+app_webhook_body='{"update_id":9002,"message":{"from":{"id":42},"chat":{"id":4242,"type":"private"},"text":"/app"}}'
+app_webhook_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+    --request POST "http://127.0.0.1:$server_port/telegram/webhook" \
+    --header "X-Telegram-Bot-Api-Secret-Token: $webhook_secret" \
+    --header 'Content-Type: application/json' \
+    --data "$app_webhook_body")"
+if [[ "$app_webhook_status" != 204 ]]; then
+    exit 1
+fi
+if ! grep -Fxq 'statusMessage=1' "$proxy_stats" || ! grep -Fxq 'webAppMessage=1' "$proxy_stats"; then
+    exit 1
+fi
 
 auth_date="$(date +%s)"
 user_json='{"id":42,"first_name":"Smoke"}'
@@ -373,6 +434,32 @@ session_status="$(curl --silent --show-error --output /dev/null --write-out '%{h
 if [[ "$session_status" != 200 ]]; then
     exit 1
 fi
+
+curl --fail --silent --show-error --cookie "$cookie_jar" --output "$overview_json" \
+    "http://127.0.0.1:$server_port/api/v1/admin/overview"
+if ! grep -Fq '"name":"smoke-host"' "$overview_json"; then
+    exit 1
+fi
+now_ms="$(( $(date +%s) * 1000 ))"
+from_ms="$((now_ms - 3600000))"
+to_ms="$((now_ms + 1000))"
+curl --fail --silent --show-error --cookie "$cookie_jar" --output "$history_json" \
+    "http://127.0.0.1:$server_port/api/v1/admin/servers/$server_id/history?from_ms=$from_ms&to_ms=$to_ms"
+if ! grep -Fq '"name":"smoke-host"' "$history_json"; then
+    exit 1
+fi
+curl --fail --silent --show-error --request POST --cookie "$cookie_jar" --output "$rotate_json" \
+    --header "Origin: http://127.0.0.1:$server_port" \
+    --header 'Content-Type: application/json' \
+    --data '{}' \
+    "http://127.0.0.1:$server_port/api/v1/admin/servers/$server_id/rotate-token"
+rotated_token="$(sed -n 's/.*"agent_token":"\([^"]*\)".*/\1/p' "$rotate_json")"
+if [[ -z "$rotated_token" ]]; then
+    exit 1
+fi
+rm -f "$rotate_json"
+printf '%s\n' 'telegram_webapp=ok'
+
 logout_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
     --request POST --cookie "$cookie_jar" --cookie-jar "$cookie_jar" \
     "http://127.0.0.1:$server_port/api/v1/auth/logout")"
@@ -397,6 +484,7 @@ canaries=(
     "$bot_token"
     "$webhook_secret"
     "$agent_token"
+	"$rotated_token"
     "$init_data"
     "$init_hash"
     "$session_cookie"

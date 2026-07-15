@@ -83,6 +83,10 @@ func TestAppServeExposesHealthAndReadinessAndStopsOnCancellation(t *testing.T) {
 		"/api/v1/auth/telegram",
 		"/api/v1/auth/session",
 		"/api/v1/auth/logout",
+		"/app",
+		"/app/",
+		"/app/app.js",
+		"/api/v1/admin/overview",
 	} {
 		response, err := client.Get("http://" + listener.Addr().String() + path)
 		if err != nil {
