@@ -128,6 +128,68 @@ func (handler *handler) serveAuthorized(writer http.ResponseWriter, request *htt
 		handler.serveHistory(writer, request)
 		return
 	}
+	if request.URL.Path == "/api/v1/admin/servers" {
+		if !requireMethod(writer, request, http.MethodPost) {
+			return
+		}
+		if !requireOrigin(writer, request, handler.policy.Origin) {
+			return
+		}
+		handler.serveCreateServer(writer, request)
+		return
+	}
+	if isRotateTokenPath(request.URL.Path) {
+		if !requireMethod(writer, request, http.MethodPost) {
+			return
+		}
+		if !requireOrigin(writer, request, handler.policy.Origin) {
+			return
+		}
+		handler.serveRotateToken(writer, request)
+		return
+	}
+	if isServerItemPath(request.URL.Path) {
+		if request.Method != http.MethodPut && request.Method != http.MethodDelete {
+			writer.Header().Set("Allow", "PUT, DELETE")
+			writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "method is not allowed")
+			return
+		}
+		if !requireOrigin(writer, request, handler.policy.Origin) {
+			return
+		}
+		if request.Method == http.MethodPut {
+			handler.serveUpdateServer(writer, request)
+		} else {
+			handler.serveDeleteServer(writer, request)
+		}
+		return
+	}
+	if request.URL.Path == "/api/v1/admin/settings" {
+		if request.Method != http.MethodGet && request.Method != http.MethodPut {
+			writer.Header().Set("Allow", "GET, PUT")
+			writeError(writer, http.StatusMethodNotAllowed, "method_not_allowed", "method is not allowed")
+			return
+		}
+		if request.Method == http.MethodPut {
+			if !requireOrigin(writer, request, handler.policy.Origin) {
+				return
+			}
+			handler.servePutSettings(writer, request)
+		} else {
+			handler.serveGetSettings(writer, request)
+		}
+		return
+	}
+	if request.URL.Path == "/api/v1/admin/alert-preference" {
+		if !requireMethod(writer, request, http.MethodPut) {
+			return
+		}
+		if !requireOrigin(writer, request, handler.policy.Origin) {
+			return
+		}
+		handler.servePutAlertPreference(writer, request, session)
+		return
+	}
 	writeError(writer, http.StatusNotFound, "not_found", "resource was not found")
 }
 
@@ -142,6 +204,21 @@ func routePattern(request *http.Request) string {
 	}
 	if isHistoryPath(request.URL.Path) {
 		return "/api/v1/admin/servers/{id}/history"
+	}
+	if request.URL.Path == "/api/v1/admin/servers" {
+		return "/api/v1/admin/servers"
+	}
+	if isRotateTokenPath(request.URL.Path) {
+		return "/api/v1/admin/servers/{id}/rotate-token"
+	}
+	if isServerItemPath(request.URL.Path) {
+		return "/api/v1/admin/servers/{id}"
+	}
+	if request.URL.Path == "/api/v1/admin/settings" {
+		return "/api/v1/admin/settings"
+	}
+	if request.URL.Path == "/api/v1/admin/alert-preference" {
+		return "/api/v1/admin/alert-preference"
 	}
 	return "not_found"
 }
