@@ -290,6 +290,17 @@
     setField(form, "alert_threshold_seconds", state.overview.settings.alert_threshold_seconds);
     setField(form, "history_retention_days", state.overview.settings.history_retention_days);
     field(form, "alert_preference").checked = Boolean(state.overview.alerts_enabled);
+    syncThresholdConstraint();
+  }
+
+  function syncThresholdConstraint() {
+    const form = byID("settings-form");
+    const offline = field(form, "offline_threshold_seconds");
+    const alert = field(form, "alert_threshold_seconds");
+    alert.min = offline.value || "1";
+    alert.setCustomValidity(Number(alert.value) < Number(offline.value)
+      ? "告警阈值不能小于离线判定。"
+      : "");
   }
 
   function field(form, name) {
@@ -422,6 +433,7 @@
   async function saveSettings(event) {
     event.preventDefault();
     const form = event.currentTarget;
+    syncThresholdConstraint();
     if (!form.reportValidity()) return;
     setFormBusy(form, true);
     clearError();
@@ -636,7 +648,12 @@
     byID("server-dialog").addEventListener("close", () => { state.selectedServer = null; });
     byID("rotate-token").addEventListener("click", rotateToken);
     byID("delete-server").addEventListener("click", deleteServer);
-    byID("settings-form").addEventListener("submit", saveSettings);
+    const settingsForm = byID("settings-form");
+    settingsForm.addEventListener("submit", saveSettings);
+    const offline = byID("offline-threshold");
+    const alert = byID("alert-threshold");
+    offline.addEventListener("input", syncThresholdConstraint);
+    alert.addEventListener("input", syncThresholdConstraint);
     byID("token-copy").addEventListener("click", copyToken);
     byID("token-close").addEventListener("click", dismissToken);
     byID("token-done").addEventListener("click", dismissToken);

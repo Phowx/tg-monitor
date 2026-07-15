@@ -111,8 +111,8 @@
         <div><p class="eyebrow">Policy</p><h2 id="settings-title">监控设置</h2></div>
       </div>
       <form id="settings-form" class="panel form-grid">
-        <label>离线判定（秒）<input name="offline_threshold_seconds" type="number" min="1" max="86400" required></label>
-        <label>告警阈值（秒）<input name="alert_threshold_seconds" type="number" min="1" max="86400" required></label>
+        <label>离线判定（秒）<input id="offline-threshold" name="offline_threshold_seconds" type="number" min="1" max="86400" required></label>
+        <label>告警阈值（秒）<input id="alert-threshold" name="alert_threshold_seconds" type="number" min="1" max="86400" required></label>
         <label>历史保留（天）<input name="history_retention_days" type="number" min="1" max="365" required></label>
         <label class="check-row"><input name="alert_preference" type="checkbox"> 接收离线告警</label>
         <button class="button" type="submit">保存设置</button>

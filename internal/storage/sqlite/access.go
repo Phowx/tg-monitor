@@ -33,6 +33,9 @@ func (s *Store) UpdateSettings(ctx context.Context, settings domain.Settings) er
 	if settings.OfflineThresholdSeconds <= 0 || settings.AlertThresholdSeconds <= 0 || settings.HistoryRetentionDays <= 0 {
 		return errors.New("update settings: thresholds and retention must be positive")
 	}
+	if settings.AlertThresholdSeconds < settings.OfflineThresholdSeconds {
+		return errors.New("update settings: alert threshold must be at least the offline threshold")
+	}
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE settings SET offline_threshold_seconds = ?, alert_threshold_seconds = ?,
 		history_retention_days = ?, updated_at_ms = ? WHERE id = 1`,

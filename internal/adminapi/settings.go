@@ -58,5 +58,6 @@ func (handler *handler) servePutAlertPreference(writer http.ResponseWriter, requ
 func validSettings(settings domain.Settings) bool {
 	return settings.OfflineThresholdSeconds >= 1 && settings.OfflineThresholdSeconds <= 86_400 &&
 		settings.AlertThresholdSeconds >= 1 && settings.AlertThresholdSeconds <= 86_400 &&
+		settings.AlertThresholdSeconds >= settings.OfflineThresholdSeconds &&
 		settings.HistoryRetentionDays >= 1 && settings.HistoryRetentionDays <= 365
 }
