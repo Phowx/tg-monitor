@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	wantHelp   = "tg-monitor administrator commands:\n/status - show server status\n/alerts_on - enable alerts\n/alerts_off - disable alerts\n/help - show this help"
-	wantPrompt = "Use /help to list available commands."
+	testPublicURL = "https://monitor.example.com"
+	wantHelp      = "tg-monitor administrator commands:\n/status - show server status\n/app - open operator app\n/alerts_on - enable alerts\n/alerts_off - disable alerts\n/help - show this help"
+	wantPrompt    = "Use /help to list available commands."
 )
 
 type commandRepositoryStub struct {
@@ -50,6 +51,15 @@ func (r *commandRepositoryStub) SetAlertPreference(_ context.Context, userID int
 	return r.preferenceErr
 }
 
+func newTestCommander(t *testing.T, repository CommandRepository, now func() time.Time) *Commander {
+	t.Helper()
+	commander, err := NewCommander(repository, testPublicURL, now)
+	if err != nil {
+		t.Fatalf("NewCommander() error = %v", err)
+	}
+	return commander
+}
+
 func TestCommandHelpRouting(t *testing.T) {
 	tests := []struct {
 		name string
@@ -67,13 +77,13 @@ func TestCommandHelpRouting(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			commander := NewCommander(&commandRepositoryStub{}, time.Now)
+			commander := newTestCommander(t, &commandRepositoryStub{}, time.Now)
 			got, err := commander.Reply(context.Background(), 42, tt.text)
 			if err != nil {
 				t.Fatalf("Reply() error = %v", err)
 			}
-			if got != tt.want {
-				t.Fatalf("Reply() = %q, want %q", got, tt.want)
+			if got.Text != tt.want || got.WebAppURL != "" || got.ButtonText != "" {
+				t.Fatalf("Reply() = %#v, want plain text %q", got, tt.want)
 			}
 		})
 	}
@@ -93,13 +103,13 @@ func TestCommandAlertPreferences(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repository := &commandRepositoryStub{}
-			commander := NewCommander(repository, time.Now)
+			commander := newTestCommander(t, repository, time.Now)
 			got, err := commander.Reply(context.Background(), 987654, tt.text)
 			if err != nil {
 				t.Fatalf("Reply() error = %v", err)
 			}
-			if got != tt.wantReply {
-				t.Fatalf("Reply() = %q, want %q", got, tt.wantReply)
+			if got != (Reply{Text: tt.wantReply}) {
+				t.Fatalf("Reply() = %#v, want plain text %q", got, tt.wantReply)
 			}
 			if repository.preferenceCalls != 1 || repository.preferenceUserID != 987654 || repository.preferenceEnabled != tt.wantEnabled {
 				t.Fatalf("SetAlertPreference calls = %d, user = %d, enabled = %v", repository.preferenceCalls, repository.preferenceUserID, repository.preferenceEnabled)
@@ -110,7 +120,7 @@ func TestCommandAlertPreferences(t *testing.T) {
 
 func TestCommandAlertPreferenceErrorIsSafe(t *testing.T) {
 	repository := &commandRepositoryStub{preferenceErr: errors.New("database leaked detail")}
-	commander := NewCommander(repository, time.Now)
+	commander := newTestCommander(t, repository, time.Now)
 
 	_, err := commander.Reply(context.Background(), 987654, "/alerts_on SECRET-TEXT")
 	if err == nil {
@@ -144,9 +154,9 @@ func TestStatusReportsOrderedServerStates(t *testing.T) {
 			latestMetrics(5, nowMS-1_000, 4.44, 20, 40),
 		},
 	}
-	commander := NewCommander(repository, func() time.Time { return time.UnixMilli(nowMS) })
+	commander := newTestCommander(t, repository, func() time.Time { return time.UnixMilli(nowMS) })
 
-	got, err := commander.Reply(context.Background(), 42, "/status@my_bot ignored")
+	reply, err := commander.Reply(context.Background(), 42, "/status@my_bot ignored")
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
@@ -158,8 +168,8 @@ func TestStatusReportsOrderedServerStates(t *testing.T) {
 		"[offline] no-data — no data",
 		"[disabled] <node>&*_[] — CPU 4.4%, memory 50.0%, seen 1s ago",
 	}, "\n")
-	if got != want {
-		t.Fatalf("Reply() =\n%s\nwant:\n%s", got, want)
+	if reply != (Reply{Text: want}) {
+		t.Fatalf("Reply() = %#v, want text:\n%s", reply, want)
 	}
 }
 
@@ -172,12 +182,13 @@ func TestStatusBoundsCompleteUTF8LinesAndReportsOmittedCount(t *testing.T) {
 		repository.servers = append(repository.servers, domain.Server{ID: int64(i + 1), Name: name, Enabled: true})
 		wantLines["[offline] "+name+" — no data"] = struct{}{}
 	}
-	commander := NewCommander(repository, func() time.Time { return time.UnixMilli(nowMS) })
+	commander := newTestCommander(t, repository, func() time.Time { return time.UnixMilli(nowMS) })
 
-	got, err := commander.Reply(context.Background(), 42, "/status")
+	reply, err := commander.Reply(context.Background(), 42, "/status")
 	if err != nil {
 		t.Fatalf("Reply() error = %v", err)
 	}
+	got := reply.Text
 	if size := len([]byte(got)); size > 3_800 {
 		t.Fatalf("Reply() size = %d bytes, want <= 3800", size)
 	}
@@ -236,7 +247,7 @@ func TestStatusRepositoryErrorsAreSafe(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			commander := NewCommander(tt.repository, time.Now)
+			commander := newTestCommander(t, tt.repository, time.Now)
 			_, err := commander.Reply(context.Background(), 42, "/status")
 			if err == nil || err.Error() != tt.want {
 				t.Fatalf("Reply() error = %v, want %q", err, tt.want)
@@ -247,6 +258,28 @@ func TestStatusRepositoryErrorsAreSafe(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCommandAppReturnsStructuredWebAppButton(t *testing.T) {
+	commander := newTestCommander(t, &commandRepositoryStub{}, time.Now)
+	got, err := commander.Reply(context.Background(), 42, "/app@my_bot")
+	if err != nil {
+		t.Fatalf("Reply() error = %v", err)
+	}
+	want := Reply{
+		Text:       "Open the tg-monitor operator app.",
+		WebAppURL:  "https://monitor.example.com/app/",
+		ButtonText: "Open tg-monitor",
+	}
+	if got != want {
+		t.Fatalf("Reply() = %#v, want %#v", got, want)
+	}
+}
+
+func TestNewCommanderRejectsUnsafePublicURL(t *testing.T) {
+	if commander, err := NewCommander(&commandRepositoryStub{}, "http://monitor.example.com", time.Now); err == nil || commander != nil {
+		t.Fatalf("NewCommander() = %#v, %v; want nil, error", commander, err)
 	}
 }
 

@@ -91,7 +91,10 @@ func newWithDependencies(ctx context.Context, cfg config.ApplicationRuntimeConfi
 		if err != nil {
 			return fail(fmt.Errorf("create Telegram routes: sender: %w", err))
 		}
-		commander := telegrambot.NewCommander(store, dependencies.now)
+		commander, err := telegrambot.NewCommander(store, telegram.PublicURL, dependencies.now)
+		if err != nil {
+			return fail(fmt.Errorf("create Telegram routes: commander: %w", err))
+		}
 		webhook, err := telegrambot.NewWebhookHandler(telegrambot.WebhookDependencies{
 			Updates: store, Sender: sender, Replier: commander,
 			Secret: telegram.WebhookSecret, AdminIDs: telegram.AdminTelegramIDs,

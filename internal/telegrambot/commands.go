@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/tg-monitor/tg-monitor/internal/domain"
+	"github.com/tg-monitor/tg-monitor/internal/websession"
 )
 
 const (
-	helpText            = "tg-monitor administrator commands:\n/status - show server status\n/alerts_on - enable alerts\n/alerts_off - disable alerts\n/help - show this help"
+	helpText            = "tg-monitor administrator commands:\n/status - show server status\n/app - open operator app\n/alerts_on - enable alerts\n/alerts_off - disable alerts\n/help - show this help"
 	promptText          = "Use /help to list available commands."
 	maxStatusReplyBytes = 3_800
 )
@@ -23,35 +24,59 @@ type CommandRepository interface {
 	SetAlertPreference(context.Context, int64, bool) error
 }
 
+type Reply struct {
+	Text       string
+	WebAppURL  string
+	ButtonText string
+}
+
 type Commander struct {
 	repository CommandRepository
 	now        func() time.Time
+	webAppURL  string
 }
 
-func NewCommander(repository CommandRepository, now func() time.Time) *Commander {
+func NewCommander(repository CommandRepository, publicURL string, now func() time.Time) (*Commander, error) {
+	policy, err := websession.NewPolicy(publicURL)
+	if err != nil {
+		return nil, errors.New("create Telegram commander: invalid public URL")
+	}
 	if now == nil {
 		now = time.Now
 	}
-	return &Commander{repository: repository, now: now}
+	return &Commander{
+		repository: repository,
+		now:        now,
+		webAppURL:  strings.TrimSuffix(policy.Origin, "/") + "/app/",
+	}, nil
 }
 
-func (c *Commander) Reply(ctx context.Context, telegramUserID int64, text string) (string, error) {
+func (c *Commander) Reply(ctx context.Context, telegramUserID int64, text string) (Reply, error) {
 	command, ok := parseCommand(text)
 	if !ok {
-		return promptText, nil
+		return Reply{Text: promptText}, nil
 	}
 
 	switch command {
 	case "/start", "/help":
-		return helpText, nil
+		return Reply{Text: helpText}, nil
+	case "/app":
+		return Reply{
+			Text:       "Open the tg-monitor operator app.",
+			WebAppURL:  c.webAppURL,
+			ButtonText: "Open tg-monitor",
+		}, nil
 	case "/alerts_on":
-		return c.setAlertPreference(ctx, telegramUserID, true)
+		text, err := c.setAlertPreference(ctx, telegramUserID, true)
+		return Reply{Text: text}, err
 	case "/alerts_off":
-		return c.setAlertPreference(ctx, telegramUserID, false)
+		text, err := c.setAlertPreference(ctx, telegramUserID, false)
+		return Reply{Text: text}, err
 	case "/status":
-		return c.status(ctx)
+		text, err := c.status(ctx)
+		return Reply{Text: text}, err
 	default:
-		return helpText, nil
+		return Reply{Text: helpText}, nil
 	}
 }
 

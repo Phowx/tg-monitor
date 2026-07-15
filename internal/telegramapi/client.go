@@ -29,6 +29,25 @@ type Client struct {
 	httpClient *http.Client
 }
 
+type webAppButtonRequest struct {
+	ChatID      int64                `json:"chat_id"`
+	Text        string               `json:"text"`
+	ReplyMarkup inlineKeyboardMarkup `json:"reply_markup"`
+}
+
+type inlineKeyboardMarkup struct {
+	InlineKeyboard [][]inlineKeyboardButton `json:"inline_keyboard"`
+}
+
+type inlineKeyboardButton struct {
+	Text   string       `json:"text"`
+	WebApp webAppTarget `json:"web_app"`
+}
+
+type webAppTarget struct {
+	URL string `json:"url"`
+}
+
 func New(botToken string, timeout time.Duration) (*Client, error) {
 	if timeout <= 0 {
 		return nil, errors.New("create Telegram client: timeout must be positive")
@@ -99,6 +118,33 @@ func (client *Client) SendMessage(ctx context.Context, chatID int64, text string
 	}
 	if !accepted {
 		return errors.New("telegram sendMessage: rejected response")
+	}
+	return nil
+}
+
+func (client *Client) SendWebAppButton(ctx context.Context, chatID int64, text, buttonText, webAppURL string) error {
+	parsed, err := url.Parse(strings.TrimSpace(webAppURL))
+	secure := err == nil && parsed.Scheme == "https"
+	loopbackHTTP := err == nil && parsed.Scheme == "http" && loopbackHost(parsed.Hostname())
+	if chatID <= 0 || strings.TrimSpace(text) == "" || strings.TrimSpace(buttonText) == "" || err != nil || parsed.Opaque != "" || (!secure && !loopbackHTTP) || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+		return errors.New("telegram sendMessage web app: invalid input")
+	}
+	request := webAppButtonRequest{
+		ChatID: chatID,
+		Text:   text,
+		ReplyMarkup: inlineKeyboardMarkup{InlineKeyboard: [][]inlineKeyboardButton{{{
+			Text: buttonText,
+			WebApp: webAppTarget{
+				URL: parsed.String(),
+			},
+		}}}},
+	}
+	var accepted bool
+	if err := client.call(ctx, "sendMessage", request, &accepted); err != nil {
+		return err
+	}
+	if !accepted {
+		return errors.New("telegram sendMessage web app: rejected response")
 	}
 	return nil
 }

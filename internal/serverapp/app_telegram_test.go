@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -152,6 +153,38 @@ func TestAppServeComposesTelegramRoutesWithSharedStore(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Bot API did not receive sendMessage")
+	}
+
+	appWebhookRequest, err := http.NewRequest(http.MethodPost, baseURL+"/telegram/webhook", strings.NewReader(
+		`{"update_id":9002,"message":{"from":{"id":42},"chat":{"id":4242,"type":"private"},"text":"/app"}}`,
+	))
+	if err != nil {
+		t.Fatalf("NewRequest(app webhook) error = %v", err)
+	}
+	appWebhookRequest.Header.Set("X-Telegram-Bot-Api-Secret-Token", cfg.Telegram.WebhookSecret)
+	appWebhookResponse, err := client.Do(appWebhookRequest)
+	if err != nil {
+		t.Fatalf("POST app webhook error = %v", err)
+	}
+	appWebhookResponse.Body.Close()
+	if appWebhookResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("POST app webhook status = %d, want 204", appWebhookResponse.StatusCode)
+	}
+	select {
+	case sent := <-botRequests:
+		wantBody := map[string]any{
+			"chat_id": float64(4242),
+			"text":    "Open the tg-monitor operator app.",
+			"reply_markup": map[string]any{"inline_keyboard": []any{[]any{map[string]any{
+				"text":    "Open tg-monitor",
+				"web_app": map[string]any{"url": "http://127.0.0.1/app/"},
+			}}}},
+		}
+		if sent.path != "/bot"+cfg.Telegram.BotToken+"/sendMessage" || !reflect.DeepEqual(sent.body, wantBody) {
+			t.Fatalf("Bot API app request = %s %#v, want %#v", sent.path, sent.body, wantBody)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Bot API did not receive Web App sendMessage")
 	}
 	if inserted, err := app.store.RecordTelegramUpdate(context.Background(), 9001, now.Add(time.Second).UnixMilli()); err != nil || inserted {
 		t.Fatalf("shared store duplicate update = %v, %v; want false, nil", inserted, err)

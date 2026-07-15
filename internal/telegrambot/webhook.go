@@ -21,10 +21,11 @@ type UpdateRepository interface {
 
 type Sender interface {
 	SendMessage(context.Context, int64, string) error
+	SendWebAppButton(context.Context, int64, string, string, string) error
 }
 
 type Replier interface {
-	Reply(context.Context, int64, string) (string, error)
+	Reply(context.Context, int64, string) (Reply, error)
 }
 
 type WebhookDependencies struct {
@@ -159,7 +160,13 @@ func (handler *webhookHandler) ServeHTTP(writer http.ResponseWriter, request *ht
 		writer.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if err := handler.sender.SendMessage(request.Context(), message.Chat.ID, reply); err != nil {
+	var sendErr error
+	if reply.WebAppURL == "" {
+		sendErr = handler.sender.SendMessage(request.Context(), message.Chat.ID, reply.Text)
+	} else {
+		sendErr = handler.sender.SendWebAppButton(request.Context(), message.Chat.ID, reply.Text, reply.ButtonText, reply.WebAppURL)
+	}
+	if sendErr != nil {
 		handler.logCommandFailure("send_message_failed", update.UpdateID, message.From.ID)
 	}
 	writer.WriteHeader(http.StatusNoContent)

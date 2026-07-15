@@ -37,15 +37,20 @@ func (stub *webhookUpdatesStub) RecordTelegramUpdate(_ context.Context, updateID
 }
 
 type webhookSenderStub struct {
-	err    error
-	calls  int
-	chatID int64
-	text   string
-	events *[]string
+	err          error
+	calls        int
+	messageCalls int
+	buttonCalls  int
+	chatID       int64
+	text         string
+	buttonText   string
+	webAppURL    string
+	events       *[]string
 }
 
 func (stub *webhookSenderStub) SendMessage(_ context.Context, chatID int64, text string) error {
 	stub.calls++
+	stub.messageCalls++
 	stub.chatID = chatID
 	stub.text = text
 	if stub.events != nil {
@@ -54,8 +59,21 @@ func (stub *webhookSenderStub) SendMessage(_ context.Context, chatID int64, text
 	return stub.err
 }
 
+func (stub *webhookSenderStub) SendWebAppButton(_ context.Context, chatID int64, text, buttonText, webAppURL string) error {
+	stub.calls++
+	stub.buttonCalls++
+	stub.chatID = chatID
+	stub.text = text
+	stub.buttonText = buttonText
+	stub.webAppURL = webAppURL
+	if stub.events != nil {
+		*stub.events = append(*stub.events, "send")
+	}
+	return stub.err
+}
+
 type webhookReplierStub struct {
-	reply  string
+	reply  Reply
 	err    error
 	calls  int
 	userID int64
@@ -63,7 +81,7 @@ type webhookReplierStub struct {
 	events *[]string
 }
 
-func (stub *webhookReplierStub) Reply(_ context.Context, userID int64, text string) (string, error) {
+func (stub *webhookReplierStub) Reply(_ context.Context, userID int64, text string) (Reply, error) {
 	stub.calls++
 	stub.userID = userID
 	stub.text = text
@@ -184,7 +202,7 @@ func newWebhookTestHandler(t *testing.T) (http.Handler, *webhookUpdatesStub, *we
 	t.Helper()
 	updates := &webhookUpdatesStub{inserted: true}
 	sender := &webhookSenderStub{}
-	replier := &webhookReplierStub{reply: "safe reply"}
+	replier := &webhookReplierStub{reply: Reply{Text: "safe reply"}}
 	handler, err := NewWebhookHandler(WebhookDependencies{
 		Updates:  updates,
 		Sender:   sender,
@@ -225,7 +243,7 @@ func TestWebhookRecordsBeforeReplyAndSend(t *testing.T) {
 	events := make([]string, 0, 3)
 	updates := &webhookUpdatesStub{inserted: true, events: &events}
 	sender := &webhookSenderStub{events: &events}
-	replier := &webhookReplierStub{reply: "administrator reply", events: &events}
+	replier := &webhookReplierStub{reply: Reply{Text: "administrator reply"}, events: &events}
 	handler := mustWebhookHandler(t, updates, sender, replier, nil)
 
 	response := serveWebhook(handler, http.MethodPost, testWebhookSecret, strings.NewReader(validWebhookUpdate(9001)))
@@ -241,15 +259,34 @@ func TestWebhookRecordsBeforeReplyAndSend(t *testing.T) {
 	if replier.userID != 42 || replier.text != "/help" {
 		t.Fatalf("Reply(%d, %q), want (42, /help)", replier.userID, replier.text)
 	}
-	if sender.chatID != 4242 || sender.text != "administrator reply" {
-		t.Fatalf("SendMessage(%d, %q), want private chat 4242 and reply", sender.chatID, sender.text)
+	if sender.messageCalls != 1 || sender.buttonCalls != 0 || sender.chatID != 4242 || sender.text != "administrator reply" {
+		t.Fatalf("plain send = %#v", sender)
+	}
+}
+
+func TestWebhookDispatchesStructuredReplyAsWebAppButton(t *testing.T) {
+	updates := &webhookUpdatesStub{inserted: true}
+	sender := &webhookSenderStub{}
+	replier := &webhookReplierStub{reply: Reply{
+		Text:       "Open the tg-monitor operator app.",
+		ButtonText: "Open tg-monitor",
+		WebAppURL:  "https://monitor.example.com/app/",
+	}}
+	handler := mustWebhookHandler(t, updates, sender, replier, nil)
+
+	response := serveWebhook(handler, http.MethodPost, testWebhookSecret, strings.NewReader(validWebhookUpdate(9002)))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", response.Code)
+	}
+	if sender.messageCalls != 0 || sender.buttonCalls != 1 || sender.chatID != 4242 || sender.text != replier.reply.Text || sender.buttonText != replier.reply.ButtonText || sender.webAppURL != replier.reply.WebAppURL {
+		t.Fatalf("button send = %#v, reply = %#v", sender, replier.reply)
 	}
 }
 
 func TestWebhookDuplicateAcknowledgesWithoutCommandSideEffects(t *testing.T) {
 	updates := &webhookUpdatesStub{inserted: false}
 	sender := &webhookSenderStub{}
-	replier := &webhookReplierStub{reply: "must not send"}
+	replier := &webhookReplierStub{reply: Reply{Text: "must not send"}}
 	handler := mustWebhookHandler(t, updates, sender, replier, nil)
 
 	response := serveWebhook(handler, http.MethodPost, testWebhookSecret, strings.NewReader(validWebhookUpdate(9001)))
@@ -264,7 +301,7 @@ func TestWebhookDuplicateAcknowledgesWithoutCommandSideEffects(t *testing.T) {
 func TestWebhookStoreFailureRequestsRetryWithoutSideEffects(t *testing.T) {
 	updates := &webhookUpdatesStub{err: errors.New("STORE-ERROR-CANARY")}
 	sender := &webhookSenderStub{}
-	replier := &webhookReplierStub{reply: "must not send"}
+	replier := &webhookReplierStub{reply: Reply{Text: "must not send"}}
 	handler := mustWebhookHandler(t, updates, sender, replier, nil)
 
 	response := serveWebhook(handler, http.MethodPost, testWebhookSecret, strings.NewReader(validWebhookUpdate(9001)))
@@ -298,7 +335,7 @@ func TestWebhookSilentlyFiltersUntrustedOrUnsupportedUpdatesAfterRecording(t *te
 		t.Run(tt.name, func(t *testing.T) {
 			updates := &webhookUpdatesStub{inserted: true}
 			sender := &webhookSenderStub{}
-			replier := &webhookReplierStub{reply: "must not send"}
+			replier := &webhookReplierStub{reply: Reply{Text: "must not send"}}
 			handler := mustWebhookHandler(t, updates, sender, replier, nil)
 
 			response := serveWebhook(handler, http.MethodPost, testWebhookSecret, strings.NewReader(tt.body))
@@ -338,7 +375,7 @@ func TestWebhookCommandFailuresAreAcknowledgedAndLoggedSafely(t *testing.T) {
 			var logs bytes.Buffer
 			updates := &webhookUpdatesStub{inserted: true}
 			sender := &webhookSenderStub{err: tt.senderErr}
-			replier := &webhookReplierStub{reply: "REPLY-CANARY", err: tt.replierErr}
+			replier := &webhookReplierStub{reply: Reply{Text: "REPLY-CANARY"}, err: tt.replierErr}
 			handler := mustWebhookHandler(t, updates, sender, replier, testWebhookLogger(&logs))
 			body := `{"update_id":9001,"token":"TOKEN-CANARY","message":{"from":{"id":42},"chat":{"id":4242,"type":"private"},"text":"MESSAGE-TEXT-CANARY"}}`
 
