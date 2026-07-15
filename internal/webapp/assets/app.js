@@ -52,17 +52,17 @@
     }
     const theme = window.Telegram.WebApp.themeParams || {};
     const variables = {
-      bg_color: "--tg-theme-bg-color",
-      secondary_bg_color: "--tg-theme-secondary-bg-color",
-      text_color: "--tg-theme-text-color",
-      hint_color: "--tg-theme-hint-color",
-      button_color: "--tg-theme-button-color",
-      button_text_color: "--tg-theme-button-text-color",
+      bg_color: ["--tg-theme-bg-color", "--app-bg"],
+      secondary_bg_color: ["--tg-theme-secondary-bg-color", "--app-surface"],
+      text_color: ["--tg-theme-text-color", "--app-text"],
+      hint_color: ["--tg-theme-hint-color", "--app-muted"],
+      button_color: ["--tg-theme-button-color", "--app-accent"],
+      button_text_color: ["--tg-theme-button-text-color", "--app-accent-text"],
     };
-    Object.entries(variables).forEach(([name, variable]) => {
+    Object.entries(variables).forEach(([name, variableNames]) => {
       const value = theme[name];
       if (typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)) {
-        document.documentElement.style.setProperty(variable, value);
+        variableNames.forEach((variable) => document.documentElement.style.setProperty(variable, value));
       }
     });
   }

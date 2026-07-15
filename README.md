@@ -235,6 +235,24 @@ telegram_session=ok logout=ok
 telegram_sigterm=clean secret_log_scan=clean
 ```
 
+For the deterministic real-browser journey, install Node.js/npm only on the development machine, then install the Playwright CLI and its Chromium build. These are test dependencies; the production binaries remain CGO-free and have no Node.js runtime requirement.
+
+```bash
+npm install --global @playwright/cli@latest
+playwright-cli install-browser chromium --with-deps
+GO=/path/to/go bash scripts/smoke-webapp.sh
+```
+
+The browser smoke starts the production server on loopback, injects a signed fake Telegram Mini App bridge, and exercises login, 1-hour/7-day history, server create/edit/disable/token rotation/delete, settings, alert preference, keyboard focus, 320px layout, dark theme, and logout. Its final output is:
+
+```text
+webapp_browser=ok screenshots=3
+keyboard=ok network_origin=clean
+secret_log_scan=clean
+```
+
+The ignored artifacts are written under `output/playwright/webapp/` as `mobile-light.png`, `mobile-dark.png`, and `desktop-admin.png`. Inspect all three for clipping, overlap, contrast, focus visibility, and dialog overflow before release.
+
 Verify the public shell and its security policy independently of Telegram authentication:
 
 ```bash

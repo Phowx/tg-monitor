@@ -51,6 +51,7 @@ main {
 }
 
 h1, h2, h3, p { margin-top: 0; }
+h1, h2, h3, strong { color: var(--app-text); }
 h1 { margin-bottom: 0; font-size: clamp(1.4rem, 5vw, 2rem); letter-spacing: -0.035em; }
 h2 { margin-bottom: 6px; letter-spacing: -0.025em; }
 h3 { grid-column: 1 / -1; margin-bottom: 0; }
