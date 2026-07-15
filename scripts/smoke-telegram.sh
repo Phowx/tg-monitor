@@ -216,7 +216,7 @@ func (recorder *recorder) serveTLS(connection net.Conn, certificate tls.Certific
 		webAppValid := false
 		if baseValid && decodeErr == nil && payload.ChatID == 4242 && len(payload.ReplyMarkup.InlineKeyboard) == 1 && len(payload.ReplyMarkup.InlineKeyboard[0]) == 1 {
 			button := payload.ReplyMarkup.InlineKeyboard[0][0]
-			webAppValid = payload.Text == "Open the tg-monitor operator app." && button.Text == "Open tg-monitor" && button.WebApp.URL == recorder.webAppURL
+			webAppValid = payload.Text == "点击下方按钮打开 tg-monitor 监控面板。" && button.Text == "打开监控面板" && button.WebApp.URL == recorder.webAppURL
 		}
 		valid := statusValid || webAppValid
 		if valid {

@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	helpText            = "tg-monitor administrator commands:\n/status - show server status\n/app - open operator app\n/alerts_on - enable alerts\n/alerts_off - disable alerts\n/help - show this help"
-	promptText          = "Use /help to list available commands."
+	helpText            = "tg-monitor 管理员命令：\n/status - 查看服务器状态\n/app - 打开监控面板\n/alerts_on - 开启离线告警\n/alerts_off - 关闭离线告警\n/help - 显示帮助"
+	promptText          = "请发送 /help 查看可用命令。"
 	maxStatusReplyBytes = 3_800
 )
 
@@ -62,9 +62,9 @@ func (c *Commander) Reply(ctx context.Context, telegramUserID int64, text string
 		return Reply{Text: helpText}, nil
 	case "/app":
 		return Reply{
-			Text:       "Open the tg-monitor operator app.",
+			Text:       "点击下方按钮打开 tg-monitor 监控面板。",
 			WebAppURL:  c.webAppURL,
-			ButtonText: "Open tg-monitor",
+			ButtonText: "打开监控面板",
 		}, nil
 	case "/alerts_on":
 		text, err := c.setAlertPreference(ctx, telegramUserID, true)
@@ -100,9 +100,9 @@ func (c *Commander) setAlertPreference(ctx context.Context, telegramUserID int64
 		return "", errors.New("telegram command alerts: update preference failed")
 	}
 	if enabled {
-		return "Alerts enabled.", nil
+		return "离线告警已开启。", nil
 	}
-	return "Alerts disabled.", nil
+	return "离线告警已关闭。", nil
 }
 
 func (c *Commander) status(ctx context.Context) (string, error) {
@@ -135,21 +135,21 @@ func (c *Commander) status(ctx context.Context) (string, error) {
 	lines := make([]string, 0, len(servers))
 	for _, server := range servers {
 		latest, hasMetrics := metricsByServer[server.ID]
-		state := "offline"
+		state := "离线"
 		if !server.Enabled {
-			state = "disabled"
+			state = "停用"
 		} else if hasMetrics && latest.ReceivedAtMS >= cutoffMS {
-			state = "online"
+			state = "在线"
 		}
 
 		if !hasMetrics {
-			lines = append(lines, fmt.Sprintf("[%s] %s — no data", state, server.Name))
+			lines = append(lines, fmt.Sprintf("【%s】 %s — 暂无数据", state, server.Name))
 			continue
 		}
 		memoryPct := 100 * float64(latest.Report.MemoryUsedBytes) / float64(latest.Report.MemoryTotalBytes)
 		age := formatAge(now.UnixMilli() - latest.ReceivedAtMS)
 		lines = append(lines, fmt.Sprintf(
-			"[%s] %s — CPU %.1f%%, memory %.1f%%, seen %s ago",
+			"【%s】 %s — CPU %.1f%%，内存 %.1f%%，%s前上报",
 			state,
 			server.Name,
 			latest.Report.CPUPct,
@@ -174,24 +174,24 @@ func formatAge(ageMS int64) string {
 
 	switch {
 	case days > 0 && hours > 0:
-		return fmt.Sprintf("%dd %dh", days, hours)
+		return fmt.Sprintf("%d 天 %d 小时", days, hours)
 	case days > 0:
-		return fmt.Sprintf("%dd", days)
+		return fmt.Sprintf("%d 天", days)
 	case hours > 0 && minutes > 0:
-		return fmt.Sprintf("%dh %dm", hours, minutes)
+		return fmt.Sprintf("%d 小时 %d 分钟", hours, minutes)
 	case hours > 0:
-		return fmt.Sprintf("%dh", hours)
+		return fmt.Sprintf("%d 小时", hours)
 	case minutes > 0 && seconds > 0:
-		return fmt.Sprintf("%dm %ds", minutes, seconds)
+		return fmt.Sprintf("%d 分钟 %d 秒", minutes, seconds)
 	case minutes > 0:
-		return fmt.Sprintf("%dm", minutes)
+		return fmt.Sprintf("%d 分钟", minutes)
 	default:
-		return fmt.Sprintf("%ds", seconds)
+		return fmt.Sprintf("%d 秒", seconds)
 	}
 }
 
 func boundedStatusReply(lines []string) string {
-	reply := "Server status:"
+	reply := "服务器状态："
 	for i, line := range lines {
 		candidate := reply + "\n" + line
 		remaining := len(lines) - i - 1
@@ -207,5 +207,5 @@ func boundedStatusReply(lines []string) string {
 }
 
 func omittedServersLine(count int) string {
-	return fmt.Sprintf("… and %d more server(s)", count)
+	return fmt.Sprintf("…另有 %d 台服务器未显示", count)
 }

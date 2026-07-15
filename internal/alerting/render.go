@@ -33,16 +33,16 @@ func Render(kind domain.AlertKind, payloadJSON string) (string, error) {
 	var message strings.Builder
 	switch kind {
 	case domain.AlertOffline:
-		fmt.Fprintf(&message, "🔴 %s is offline\n", serverName)
+		fmt.Fprintf(&message, "🔴 %s 已离线\n", serverName)
 		writeGroup(&message, serverGroup)
-		fmt.Fprintf(&message, "Last received: %s\nAlerted after: %s",
+		fmt.Fprintf(&message, "最后上报：%s\n告警等待：%s",
 			formatTimestamp(payload.OfflineSinceMS),
 			formatDuration(payload.EventAtMS-payload.OfflineSinceMS),
 		)
 	case domain.AlertRecovery:
-		fmt.Fprintf(&message, "🟢 %s recovered\n", serverName)
+		fmt.Fprintf(&message, "🟢 %s 已恢复\n", serverName)
 		writeGroup(&message, serverGroup)
-		fmt.Fprintf(&message, "Recovered: %s\nOutage duration: %s",
+		fmt.Fprintf(&message, "恢复时间：%s\n中断时长：%s",
 			formatTimestamp(payload.RecoveredAtMS),
 			formatDuration(payload.RecoveredAtMS-payload.OfflineSinceMS),
 		)
@@ -106,7 +106,7 @@ func displayField(value string) string {
 
 func writeGroup(message *strings.Builder, group string) {
 	if group != "" {
-		fmt.Fprintf(message, "Group: %s\n", group)
+		fmt.Fprintf(message, "分组：%s\n", group)
 	}
 }
 
@@ -115,5 +115,23 @@ func formatTimestamp(timestampMS int64) string {
 }
 
 func formatDuration(durationMS int64) string {
-	return (time.Duration(durationMS) * time.Millisecond).Truncate(time.Second).String()
+	total := durationMS / 1_000
+	units := []struct {
+		seconds int64
+		suffix  string
+	}{
+		{seconds: 86_400, suffix: "天"},
+		{seconds: 3_600, suffix: "小时"},
+		{seconds: 60, suffix: "分钟"},
+		{seconds: 1, suffix: "秒"},
+	}
+	parts := make([]string, 0, len(units))
+	for _, unit := range units {
+		value := total / unit.seconds
+		if value > 0 || unit.seconds == 1 && len(parts) == 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", value, unit.suffix))
+		}
+		total %= unit.seconds
+	}
+	return strings.Join(parts, " ")
 }

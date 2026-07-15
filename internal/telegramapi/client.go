@@ -52,6 +52,16 @@ type webAppTarget struct {
 	URL string `json:"url"`
 }
 
+type menuButtonRequest struct {
+	MenuButton menuButton `json:"menu_button"`
+}
+
+type menuButton struct {
+	Type   string        `json:"type"`
+	Text   string        `json:"text,omitempty"`
+	WebApp *webAppTarget `json:"web_app,omitempty"`
+}
+
 func New(botToken string, timeout time.Duration) (*Client, error) {
 	if timeout <= 0 {
 		return nil, errors.New("create Telegram client: timeout must be positive")
@@ -149,6 +159,42 @@ func (client *Client) SendWebAppButton(ctx context.Context, chatID int64, text, 
 	}
 	if sent.MessageID <= 0 {
 		return errors.New("telegram sendMessage web app: rejected response")
+	}
+	return nil
+}
+
+func (client *Client) SetMenuButton(ctx context.Context, text, webAppURL string) error {
+	parsed, err := url.Parse(strings.TrimSpace(webAppURL))
+	secure := err == nil && parsed.Scheme == "https"
+	loopbackHTTP := err == nil && parsed.Scheme == "http" && loopbackHost(parsed.Hostname())
+	if strings.TrimSpace(text) == "" || err != nil || parsed.Opaque != "" || (!secure && !loopbackHTTP) || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+		return errors.New("telegram setChatMenuButton: invalid input")
+	}
+	request := menuButtonRequest{MenuButton: menuButton{
+		Type: "web_app",
+		Text: strings.TrimSpace(text),
+		WebApp: &webAppTarget{
+			URL: parsed.String(),
+		},
+	}}
+	var accepted bool
+	if err := client.call(ctx, "setChatMenuButton", request, &accepted); err != nil {
+		return err
+	}
+	if !accepted {
+		return errors.New("telegram setChatMenuButton: rejected response")
+	}
+	return nil
+}
+
+func (client *Client) ResetMenuButton(ctx context.Context) error {
+	request := menuButtonRequest{MenuButton: menuButton{Type: "default"}}
+	var accepted bool
+	if err := client.call(ctx, "setChatMenuButton", request, &accepted); err != nil {
+		return err
+	}
+	if !accepted {
+		return errors.New("telegram resetChatMenuButton: rejected response")
 	}
 	return nil
 }

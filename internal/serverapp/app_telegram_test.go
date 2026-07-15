@@ -177,9 +177,9 @@ func TestAppServeComposesTelegramRoutesWithSharedStore(t *testing.T) {
 	case sent := <-botRequests:
 		wantBody := map[string]any{
 			"chat_id": float64(4242),
-			"text":    "Open the tg-monitor operator app.",
+			"text":    "点击下方按钮打开 tg-monitor 监控面板。",
 			"reply_markup": map[string]any{"inline_keyboard": []any{[]any{map[string]any{
-				"text":    "Open tg-monitor",
+				"text":    "打开监控面板",
 				"web_app": map[string]any{"url": "http://127.0.0.1/app/"},
 			}}}},
 		}

@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build Linux binaries
+        run: |
+          CGO_ENABLED=0 bash scripts/build-server.sh
+          CGO_ENABLED=0 bash scripts/build-agent.sh
+
+      - name: Create checksums
+        run: |
+          cd dist
+          sha256sum tg-monitor-server-linux-amd64 tg-monitor-server-linux-arm64 \
+            tg-monitor-agent-linux-amd64 tg-monitor-agent-linux-arm64 > SHA256SUMS
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            dist/tg-monitor-server-linux-amd64 \
+            dist/tg-monitor-server-linux-arm64 \
+            dist/tg-monitor-agent-linux-amd64 \
+            dist/tg-monitor-agent-linux-arm64 \
+            dist/SHA256SUMS \
+            --verify-tag --generate-notes --title "$GITHUB_REF_NAME"

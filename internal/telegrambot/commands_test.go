@@ -15,8 +15,8 @@ import (
 
 const (
 	testPublicURL = "https://monitor.example.com"
-	wantHelp      = "tg-monitor administrator commands:\n/status - show server status\n/app - open operator app\n/alerts_on - enable alerts\n/alerts_off - disable alerts\n/help - show this help"
-	wantPrompt    = "Use /help to list available commands."
+	wantHelp      = "tg-monitor 管理员命令：\n/status - 查看服务器状态\n/app - 打开监控面板\n/alerts_on - 开启离线告警\n/alerts_off - 关闭离线告警\n/help - 显示帮助"
+	wantPrompt    = "请发送 /help 查看可用命令。"
 )
 
 type commandRepositoryStub struct {
@@ -96,8 +96,8 @@ func TestCommandAlertPreferences(t *testing.T) {
 		wantEnabled bool
 		wantReply   string
 	}{
-		{name: "enable", text: "/alerts_on extra", wantEnabled: true, wantReply: "Alerts enabled."},
-		{name: "disable with suffix", text: "/alerts_off@my_bot", wantEnabled: false, wantReply: "Alerts disabled."},
+		{name: "enable", text: "/alerts_on extra", wantEnabled: true, wantReply: "离线告警已开启。"},
+		{name: "disable with suffix", text: "/alerts_off@my_bot", wantEnabled: false, wantReply: "离线告警已关闭。"},
 	}
 
 	for _, tt := range tests {
@@ -161,12 +161,12 @@ func TestStatusReportsOrderedServerStates(t *testing.T) {
 		t.Fatalf("Reply() error = %v", err)
 	}
 	want := strings.Join([]string{
-		"Server status:",
-		"[online] fresh — CPU 12.3%, memory 50.0%, seen 5s ago",
-		"[online] boundary — CPU 34.6%, memory 25.0%, seen 1m ago",
-		"[offline] stale — CPU 1.3%, memory 75.0%, seen 1m 1s ago",
-		"[offline] no-data — no data",
-		"[disabled] <node>&*_[] — CPU 4.4%, memory 50.0%, seen 1s ago",
+		"服务器状态：",
+		"【在线】 fresh — CPU 12.3%，内存 50.0%，5 秒前上报",
+		"【在线】 boundary — CPU 34.6%，内存 25.0%，1 分钟前上报",
+		"【离线】 stale — CPU 1.3%，内存 75.0%，1 分钟 1 秒前上报",
+		"【离线】 no-data — 暂无数据",
+		"【停用】 <node>&*_[] — CPU 4.4%，内存 50.0%，1 秒前上报",
 	}, "\n")
 	if reply != (Reply{Text: want}) {
 		t.Fatalf("Reply() = %#v, want text:\n%s", reply, want)
@@ -180,7 +180,7 @@ func TestStatusBoundsCompleteUTF8LinesAndReportsOmittedCount(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		name := strings.Repeat("节点", 40) + fmt.Sprintf("-%03d", i)
 		repository.servers = append(repository.servers, domain.Server{ID: int64(i + 1), Name: name, Enabled: true})
-		wantLines["[offline] "+name+" — no data"] = struct{}{}
+		wantLines["【离线】 "+name+" — 暂无数据"] = struct{}{}
 	}
 	commander := newTestCommander(t, repository, func() time.Time { return time.UnixMilli(nowMS) })
 
@@ -197,7 +197,7 @@ func TestStatusBoundsCompleteUTF8LinesAndReportsOmittedCount(t *testing.T) {
 	}
 
 	lines := strings.Split(got, "\n")
-	if lines[0] != "Server status:" {
+	if lines[0] != "服务器状态：" {
 		t.Fatalf("Reply() header = %q", lines[0])
 	}
 	included := 0
@@ -208,7 +208,7 @@ func TestStatusBoundsCompleteUTF8LinesAndReportsOmittedCount(t *testing.T) {
 		included++
 	}
 	omittedLine := lines[len(lines)-1]
-	omittedText := strings.TrimSuffix(strings.TrimPrefix(omittedLine, "… and "), " more server(s)")
+	omittedText := strings.TrimSuffix(strings.TrimPrefix(omittedLine, "…另有 "), " 台服务器未显示")
 	omitted, err := strconv.Atoi(omittedText)
 	if err != nil {
 		t.Fatalf("Reply() final line = %q, want omitted count", omittedLine)
@@ -268,9 +268,9 @@ func TestCommandAppReturnsStructuredWebAppButton(t *testing.T) {
 		t.Fatalf("Reply() error = %v", err)
 	}
 	want := Reply{
-		Text:       "Open the tg-monitor operator app.",
+		Text:       "点击下方按钮打开 tg-monitor 监控面板。",
 		WebAppURL:  "https://monitor.example.com/app/",
-		ButtonText: "Open tg-monitor",
+		ButtonText: "打开监控面板",
 	}
 	if got != want {
 		t.Fatalf("Reply() = %#v, want %#v", got, want)

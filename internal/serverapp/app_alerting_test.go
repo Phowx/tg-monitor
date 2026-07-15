@@ -93,7 +93,7 @@ func TestAppServeRunsAlertWorkerAndWaitsForCancellation(t *testing.T) {
 
 	select {
 	case sent := <-sender.started:
-		if sent.telegramUserID != 42 || !strings.Contains(sent.text, "alert-lifecycle-node is offline") {
+		if sent.telegramUserID != 42 || !strings.Contains(sent.text, "alert-lifecycle-node 已离线") {
 			t.Fatalf("alert send = %#v", sent)
 		}
 	case <-time.After(time.Second):

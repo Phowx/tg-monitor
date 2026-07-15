@@ -218,13 +218,13 @@ func (recorder *recorder) record(request *http.Request, body []byte, readErr err
 	defer recorder.mu.Unlock()
 	accepted := false
 	switch {
-	case valid && strings.Contains(payload.Text, " is offline"):
+	case valid && strings.Contains(payload.Text, " 已离线"):
 		recorder.offlineAttempts++
 		accepted = recorder.offlineAttempts > 1
 		if accepted {
 			recorder.offlineAccepted++
 		}
-	case valid && strings.Contains(payload.Text, " recovered"):
+	case valid && strings.Contains(payload.Text, " 已恢复"):
 		recorder.recoveryMessages++
 		accepted = true
 	default:
@@ -566,7 +566,7 @@ canaries=(
     "$session_cookie"
     "$init_data"
     "$fake_description"
-    "$server_name is offline"
+    "$server_name 已离线"
     "\"server_name\":\"$server_name\""
 )
 for canary in "${canaries[@]}"; do

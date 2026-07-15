@@ -137,13 +137,13 @@ async (page) => {
   await createForm.locator("input[name='name']").fill("browser-created");
   await createForm.locator("input[name='group']").fill("qa");
   await createForm.locator("input[name='sort_order']").fill("7");
-  await createForm.getByRole("button", { name: "创建并生成 Agent token" }).click();
+  await createForm.getByRole("button", { name: "创建并生成 Agent 令牌" }).click();
   await page.locator("#token-dialog[open]").waitFor({ state: "visible" });
   await assertDialogFits("#token-dialog", "create token dialog");
   const createdToken = (await page.locator("#token-value").textContent()) || "";
   invariant(createdToken.length >= 32, "create did not return a one-time token");
   await page.locator("#token-copy").click();
-  await waitForText("#global-message", "Agent token 已复制");
+  await waitForText("#global-message", "Agent 令牌已复制");
   invariant(await page.evaluate(() => navigator.clipboard.readText()) === createdToken, "created token was not copied to clipboard");
   await page.locator("#token-done").click();
   await page.locator("#token-dialog").waitFor({ state: "hidden" });
@@ -171,7 +171,7 @@ async (page) => {
   const rotatedToken = (await page.locator("#token-value").textContent()) || "";
   invariant(rotatedToken.length >= 32 && rotatedToken !== createdToken, "rotate did not replace the one-time token");
   await page.locator("#token-copy").click();
-  await waitForText("#global-message", "Agent token 已复制");
+  await waitForText("#global-message", "Agent 令牌已复制");
   invariant(await page.evaluate(() => navigator.clipboard.readText()) === rotatedToken, "rotated token was not copied to clipboard");
   await page.locator("#token-close").click();
   await page.locator("#token-dialog").waitFor({ state: "hidden" });

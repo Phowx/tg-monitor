@@ -53,6 +53,20 @@ func TestHTMLProvidesSemanticOperatorControls(t *testing.T) {
 	}
 }
 
+func TestAssetsUseSimplifiedChineseOperatorCopy(t *testing.T) {
+	combined := readAsset(t, "assets/index.html") + readAsset(t, "assets/app.js")
+	for _, required := range []string{"运维控制台", "实时监控", "服务器管理", "监控策略", "Agent 令牌", "1 分钟负载"} {
+		if !strings.Contains(combined, required) {
+			t.Errorf("assets missing Chinese copy %q", required)
+		}
+	}
+	for _, forbidden := range []string{"Operator console", "Live fleet", "Administration", "Policy", "Agent token", "1m 负载"} {
+		if strings.Contains(combined, forbidden) {
+			t.Errorf("assets retain user-visible English %q", forbidden)
+		}
+	}
+}
+
 func TestCSSProvidesResponsiveAccessibleTheme(t *testing.T) {
 	stylesheet := readAsset(t, "assets/app.css")
 	for _, required := range []string{

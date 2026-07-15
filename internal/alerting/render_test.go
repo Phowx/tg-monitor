@@ -21,8 +21,26 @@ func TestRenderOfflineAndRecoveryPlainText(t *testing.T) {
 	recovery.EventAtMS = 1_784_080_270_000
 	recovery.RecoveredAtMS = 1_784_080_270_000
 
-	assertRendered(t, domain.AlertOffline, offline, "🔴 node-1 is offline\nGroup: production\nLast received: 2026-07-15 01:46:40 UTC\nAlerted after: 2m0s")
-	assertRendered(t, domain.AlertRecovery, recovery, "🟢 node-1 recovered\nGroup: production\nRecovered: 2026-07-15 01:51:10 UTC\nOutage duration: 4m30s")
+	assertRendered(t, domain.AlertOffline, offline, "🔴 node-1 已离线\n分组：production\n最后上报：2026-07-15 01:46:40 UTC\n告警等待：2 分钟")
+	assertRendered(t, domain.AlertRecovery, recovery, "🟢 node-1 已恢复\n分组：production\n恢复时间：2026-07-15 01:51:10 UTC\n中断时长：4 分钟 30 秒")
+}
+
+func TestFormatDurationChinese(t *testing.T) {
+	tests := []struct {
+		milliseconds int64
+		want         string
+	}{
+		{0, "0 秒"},
+		{5_000, "5 秒"},
+		{65_000, "1 分钟 5 秒"},
+		{3_600_000, "1 小时"},
+		{90_061_000, "1 天 1 小时 1 分钟 1 秒"},
+	}
+	for _, test := range tests {
+		if got := formatDuration(test.milliseconds); got != test.want {
+			t.Errorf("formatDuration(%d) = %q, want %q", test.milliseconds, got, test.want)
+		}
+	}
 }
 
 func TestRenderFlattensUntrustedDisplayWhitespaceAndOmitsEmptyGroup(t *testing.T) {
@@ -38,7 +56,7 @@ func TestRenderFlattensUntrustedDisplayWhitespaceAndOmitsEmptyGroup(t *testing.T
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
-	if !strings.HasPrefix(got, "🔴 node one is offline\nLast received:") || strings.Contains(got, "Group:") {
+	if !strings.HasPrefix(got, "🔴 node one 已离线\n最后上报：") || strings.Contains(got, "分组：") {
 		t.Fatalf("Render() = %q, want flattened name and no group", got)
 	}
 }

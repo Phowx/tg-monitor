@@ -19,6 +19,12 @@ type telegramWebhookClientStub struct {
 	setPublicURL string
 	setSecret    string
 	setErr       error
+	setMenuCalls int
+	menuText     string
+	menuURL      string
+	setMenuErr   error
+	resetCalls   int
+	resetErr     error
 	getCalls     int
 	getInfo      telegramapi.WebhookInfo
 	getErr       error
@@ -31,6 +37,18 @@ func (stub *telegramWebhookClientStub) SetWebhook(_ context.Context, publicURL, 
 	stub.setPublicURL = publicURL
 	stub.setSecret = secret
 	return stub.setErr
+}
+
+func (stub *telegramWebhookClientStub) SetMenuButton(_ context.Context, text, webAppURL string) error {
+	stub.setMenuCalls++
+	stub.menuText = text
+	stub.menuURL = webAppURL
+	return stub.setMenuErr
+}
+
+func (stub *telegramWebhookClientStub) ResetMenuButton(context.Context) error {
+	stub.resetCalls++
+	return stub.resetErr
 }
 
 func (stub *telegramWebhookClientStub) GetWebhookInfo(context.Context) (telegramapi.WebhookInfo, error) {
@@ -192,6 +210,33 @@ func TestTelegramSetWebhookValidatesHTTPSAndRegisters(t *testing.T) {
 	})
 }
 
+func TestTelegramMenuButtonCommands(t *testing.T) {
+	t.Run("set", func(t *testing.T) {
+		harness := newTelegramCommandHarness()
+		if err := Run(context.Background(), []string{"telegram", "set-menu-button"}, harness.dependencies()); err != nil {
+			t.Fatalf("Run(telegram set-menu-button) error = %v", err)
+		}
+		if harness.client.setMenuCalls != 1 || harness.client.menuText != "打开监控面板" || harness.client.menuURL != "https://monitor.example.com/app/" {
+			t.Fatalf("SetMenuButton calls/text/url = %d/%q/%q", harness.client.setMenuCalls, harness.client.menuText, harness.client.menuURL)
+		}
+		if got := harness.stdout.String(); got != "menu_button=web_app\n" {
+			t.Fatalf("stdout = %q", got)
+		}
+		assertOnlyExpectedCommandDependencies(t, harness, "telegram")
+	})
+
+	t.Run("reset", func(t *testing.T) {
+		harness := newTelegramCommandHarness()
+		if err := Run(context.Background(), []string{"telegram", "reset-menu-button"}, harness.dependencies()); err != nil {
+			t.Fatalf("Run(telegram reset-menu-button) error = %v", err)
+		}
+		if harness.client.resetCalls != 1 || harness.stdout.String() != "menu_button=default\n" {
+			t.Fatalf("reset calls/output = %d/%q", harness.client.resetCalls, harness.stdout.String())
+		}
+		assertOnlyExpectedCommandDependencies(t, harness, "telegram")
+	})
+}
+
 func TestTelegramGetAndDeleteWebhook(t *testing.T) {
 	t.Run("get", func(t *testing.T) {
 		harness := newTelegramCommandHarness()
@@ -262,6 +307,8 @@ func TestInvalidTelegramCommandsFailBeforeDependencies(t *testing.T) {
 		{"telegram"},
 		{"telegram", "unknown"},
 		{"telegram", "set-webhook", "extra"},
+		{"telegram", "set-menu-button", "extra"},
+		{"telegram", "reset-menu-button", "extra"},
 		{"telegram", "get-webhook", "extra"},
 		{"telegram", "delete-webhook", "extra"},
 	} {

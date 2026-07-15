@@ -245,11 +245,11 @@
       appendMetric(metrics, "CPU", formatPercent(report.cpu_pct));
       appendMetric(metrics, "内存", formatPercent(ratioPercent(report.memory_used_bytes, report.memory_total_bytes)));
       appendMetric(metrics, "根磁盘", formatPercent(ratioPercent(report.root_disk_used_bytes, report.root_disk_total_bytes)));
-      appendMetric(metrics, "1m 负载", formatNumber(report.load_1));
+      appendMetric(metrics, "1 分钟负载", formatNumber(report.load_1));
       appendMetric(metrics, "最后上报", formatAge(entry.latest.received_at, state.overview.now_ms));
       appendMetric(metrics, "主机", report.system && report.system.hostname ? report.system.hostname : "未知");
     } else {
-      ["CPU", "内存", "根磁盘", "1m 负载", "最后上报", "主机"].forEach((label) => appendMetric(metrics, label, "暂无数据"));
+      ["CPU", "内存", "根磁盘", "1 分钟负载", "最后上报", "主机"].forEach((label) => appendMetric(metrics, label, "暂无数据"));
     }
     card.append(metrics);
     const details = element("button", "button button-secondary", "查看详情");
@@ -481,9 +481,9 @@
     if (!state.token) return;
     try {
       await navigator.clipboard.writeText(state.token);
-      setMessage("Agent token 已复制。");
+      setMessage("Agent 令牌已复制。");
     } catch (_) {
-      setMessage("无法自动复制，请手动选择 token。");
+      setMessage("无法自动复制，请手动选择令牌。");
     }
   }
 

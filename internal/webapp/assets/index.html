@@ -12,7 +12,7 @@
 <body>
   <header class="app-header">
     <div>
-      <p class="eyebrow">Operator console</p>
+      <p class="eyebrow">运维控制台</p>
       <h1>Telegram Monitor</h1>
     </div>
     <button id="logout-button" class="button button-quiet" type="button" hidden>退出</button>
@@ -38,7 +38,7 @@
     <section id="dashboard-view" class="view" aria-labelledby="dashboard-title" hidden>
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Live fleet</p>
+          <p class="eyebrow">实时监控</p>
           <h2 id="dashboard-title">运行概览</h2>
         </div>
         <p id="last-refresh" class="muted"></p>
@@ -57,7 +57,7 @@
       <button id="history-back" class="button button-quiet" type="button">返回概览</button>
       <div class="section-heading history-heading">
         <div>
-          <p class="eyebrow">History</p>
+          <p class="eyebrow">历史数据</p>
           <h2 id="history-title">服务器历史</h2>
           <p id="history-subtitle" class="muted"></p>
         </div>
@@ -93,7 +93,7 @@
 
     <section id="servers-view" class="view" aria-labelledby="servers-title" hidden>
       <div class="section-heading">
-        <div><p class="eyebrow">Administration</p><h2 id="servers-title">服务器管理</h2></div>
+        <div><p class="eyebrow">管理</p><h2 id="servers-title">服务器管理</h2></div>
       </div>
       <form id="create-server-form" class="panel form-grid">
         <h3>添加服务器</h3>
@@ -101,14 +101,14 @@
         <label>分组<input name="group" maxlength="120" autocomplete="off"></label>
         <label>排序<input name="sort_order" type="number" min="-2147483648" max="2147483647" value="0" required></label>
         <label class="check-row"><input name="enabled" type="checkbox" checked> 启用采集</label>
-        <button class="button" type="submit">创建并生成 Agent token</button>
+        <button class="button" type="submit">创建并生成 Agent 令牌</button>
       </form>
       <div id="admin-server-list" class="admin-list" aria-label="已配置服务器"></div>
     </section>
 
     <section id="settings-view" class="view" aria-labelledby="settings-title" hidden>
       <div class="section-heading">
-        <div><p class="eyebrow">Policy</p><h2 id="settings-title">监控设置</h2></div>
+        <div><p class="eyebrow">监控策略</p><h2 id="settings-title">监控设置</h2></div>
       </div>
       <form id="settings-form" class="panel form-grid">
         <label>离线判定（秒）<input id="offline-threshold" name="offline_threshold_seconds" type="number" min="1" max="86400" required></label>
@@ -132,7 +132,7 @@
       <label class="check-row"><input name="enabled" type="checkbox"> 启用采集</label>
       <div class="button-row">
         <button class="button" type="submit">保存</button>
-        <button id="rotate-token" class="button button-secondary" type="button">轮换 Agent token</button>
+        <button id="rotate-token" class="button button-secondary" type="button">轮换 Agent 令牌</button>
       </div>
       <fieldset class="danger-zone">
         <legend>删除服务器</legend>
@@ -146,13 +146,13 @@
   <dialog id="token-dialog" aria-labelledby="token-dialog-title">
     <div class="dialog-card token-card">
       <div class="dialog-heading">
-        <h2 id="token-dialog-title">Agent token</h2>
-        <button id="token-close" class="icon-button" type="button" aria-label="关闭并清除 token">×</button>
+        <h2 id="token-dialog-title">Agent 令牌</h2>
+        <button id="token-close" class="icon-button" type="button" aria-label="关闭并清除令牌">×</button>
       </div>
-      <p>此 token 只显示一次。请立即复制到对应 Agent 配置。</p>
+      <p>此令牌只显示一次。请立即复制到对应 Agent 配置。</p>
       <output id="token-value" class="token-value" aria-live="polite"></output>
       <div class="button-row">
-        <button id="token-copy" class="button" type="button">复制 token</button>
+        <button id="token-copy" class="button" type="button">复制令牌</button>
         <button id="token-done" class="button button-secondary" type="button">完成并清除</button>
       </div>
     </div>

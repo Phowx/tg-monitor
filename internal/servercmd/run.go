@@ -33,6 +33,8 @@ type Store interface {
 
 type TelegramWebhookClient interface {
 	SetWebhook(context.Context, string, string) error
+	SetMenuButton(context.Context, string, string) error
+	ResetMenuButton(context.Context) error
 	GetWebhookInfo(context.Context) (telegramapi.WebhookInfo, error)
 	DeleteWebhook(context.Context) error
 }
@@ -83,7 +85,7 @@ func runServe(ctx context.Context, args []string, dependencies Dependencies) err
 
 func runTelegram(ctx context.Context, args []string, dependencies Dependencies) error {
 	if len(args) == 0 {
-		return errors.New("usage: tg-monitor-server telegram <set-webhook|get-webhook|delete-webhook>")
+		return errors.New("usage: tg-monitor-server telegram <set-webhook|get-webhook|delete-webhook|set-menu-button|reset-menu-button>")
 	}
 	switch args[0] {
 	case "set-webhook":
@@ -91,6 +93,16 @@ func runTelegram(ctx context.Context, args []string, dependencies Dependencies) 
 			return errors.New("usage: tg-monitor-server telegram set-webhook")
 		}
 		return runTelegramSetWebhook(ctx, dependencies)
+	case "set-menu-button":
+		if len(args) != 1 {
+			return errors.New("usage: tg-monitor-server telegram set-menu-button")
+		}
+		return runTelegramSetMenuButton(ctx, dependencies)
+	case "reset-menu-button":
+		if len(args) != 1 {
+			return errors.New("usage: tg-monitor-server telegram reset-menu-button")
+		}
+		return runTelegramResetMenuButton(ctx, dependencies)
 	case "get-webhook":
 		if len(args) != 1 {
 			return errors.New("usage: tg-monitor-server telegram get-webhook")
@@ -123,6 +135,39 @@ func runTelegramSetWebhook(ctx context.Context, dependencies Dependencies) error
 	}
 	if _, err := io.WriteString(dependencies.Stdout, "webhook=registered\n"); err != nil {
 		return fmt.Errorf("write webhook registration result: %w", err)
+	}
+	return nil
+}
+
+func runTelegramSetMenuButton(ctx context.Context, dependencies Dependencies) error {
+	cfg, err := dependencies.LoadTelegramConfig()
+	if err != nil {
+		return err
+	}
+	client, err := dependencies.NewTelegramClient(cfg.BotToken, cfg.HTTPTimeout)
+	if err != nil {
+		return err
+	}
+	webAppURL := strings.TrimSuffix(cfg.PublicURL, "/") + "/app/"
+	if err := client.SetMenuButton(ctx, "打开监控面板", webAppURL); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(dependencies.Stdout, "menu_button=web_app\n"); err != nil {
+		return fmt.Errorf("write menu button result: %w", err)
+	}
+	return nil
+}
+
+func runTelegramResetMenuButton(ctx context.Context, dependencies Dependencies) error {
+	client, err := loadTelegramClient(dependencies)
+	if err != nil {
+		return err
+	}
+	if err := client.ResetMenuButton(ctx); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(dependencies.Stdout, "menu_button=default\n"); err != nil {
+		return fmt.Errorf("write menu button reset result: %w", err)
 	}
 	return nil
 }
