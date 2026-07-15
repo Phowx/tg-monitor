@@ -42,7 +42,7 @@ func TestAppServeComposesTelegramRoutesWithSharedStore(t *testing.T) {
 			body map[string]any
 		}{path: request.URL.Path, body: body}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"ok":true,"result":true}`)
+		_, _ = io.WriteString(writer, `{"ok":true,"result":{"message_id":123}}`)
 	}))
 	t.Cleanup(botAPI.Close)
 

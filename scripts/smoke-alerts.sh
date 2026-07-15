@@ -192,11 +192,13 @@ func (recorder *recorder) serveProxy(connection net.Conn, certificate tls.Certif
 		body, readErr := io.ReadAll(io.LimitReader(request.Body, 64<<10))
 		_ = request.Body.Close()
 		accepted := recorder.record(request, body, readErr)
-		response, _ := json.Marshal(struct {
-			OK          bool   `json:"ok"`
-			Result      bool   `json:"result"`
-			Description string `json:"description,omitempty"`
-		}{OK: true, Result: accepted, Description: recorder.description})
+		result := any(false)
+		if accepted {
+			result = map[string]any{"message_id": 1}
+		}
+		response, _ := json.Marshal(map[string]any{
+			"ok": true, "result": result, "description": recorder.description,
+		})
 		_, _ = fmt.Fprintf(tlsWriter, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: keep-alive\r\n\r\n", len(response))
 		if _, err := tlsWriter.Write(response); err != nil || tlsWriter.Flush() != nil {
 			return

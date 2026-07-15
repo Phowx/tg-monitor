@@ -26,7 +26,7 @@ func TestClientSendWebAppButtonAllowsLoopbackHTTPForDevelopment(t *testing.T) {
 		}
 		gotURL = body.ReplyMarkup.InlineKeyboard[0][0].WebApp.URL
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"ok":true,"result":true}`)
+		_, _ = io.WriteString(writer, `{"ok":true,"result":{"message_id":123}}`)
 	}))
 	t.Cleanup(server.Close)
 

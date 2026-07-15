@@ -230,8 +230,12 @@ func (recorder *recorder) serveTLS(connection net.Conn, certificate tls.Certific
 			_ = recorder.writeStatsLocked()
 			recorder.mu.Unlock()
 		}
+		result := any(false)
+		if valid {
+			result = map[string]any{"message_id": 1}
+		}
 		response, _ := json.Marshal(map[string]any{
-			"ok": valid, "result": valid, "description": recorder.description,
+			"ok": valid, "result": result, "description": recorder.description,
 		})
 		_, _ = fmt.Fprintf(writer,
 			"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: keep-alive\r\n\r\n%s",

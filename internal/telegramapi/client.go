@@ -29,6 +29,10 @@ type Client struct {
 	httpClient *http.Client
 }
 
+type sentMessageResult struct {
+	MessageID int64 `json:"message_id"`
+}
+
 type webAppButtonRequest struct {
 	ChatID      int64                `json:"chat_id"`
 	Text        string               `json:"text"`
@@ -109,14 +113,14 @@ func (client *Client) SendMessage(ctx context.Context, chatID int64, text string
 	if strings.TrimSpace(text) == "" {
 		return errors.New("telegram sendMessage: text is required")
 	}
-	var accepted bool
+	var sent sentMessageResult
 	if err := client.call(ctx, "sendMessage", struct {
 		ChatID int64  `json:"chat_id"`
 		Text   string `json:"text"`
-	}{ChatID: chatID, Text: text}, &accepted); err != nil {
+	}{ChatID: chatID, Text: text}, &sent); err != nil {
 		return err
 	}
-	if !accepted {
+	if sent.MessageID <= 0 {
 		return errors.New("telegram sendMessage: rejected response")
 	}
 	return nil
@@ -139,11 +143,11 @@ func (client *Client) SendWebAppButton(ctx context.Context, chatID int64, text, 
 			},
 		}}}},
 	}
-	var accepted bool
-	if err := client.call(ctx, "sendMessage", request, &accepted); err != nil {
+	var sent sentMessageResult
+	if err := client.call(ctx, "sendMessage", request, &sent); err != nil {
 		return err
 	}
-	if !accepted {
+	if sent.MessageID <= 0 {
 		return errors.New("telegram sendMessage web app: rejected response")
 	}
 	return nil
