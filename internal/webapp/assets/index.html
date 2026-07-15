@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Telegram Monitor</title>
+  <link rel="stylesheet" href="/app/app.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="/app/app.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">Operator console</p>
+      <h1>Telegram Monitor</h1>
+    </div>
+    <button id="logout-button" class="button button-quiet" type="button" hidden>退出</button>
+  </header>
+
+  <nav id="primary-nav" class="primary-nav" aria-label="主要页面" hidden>
+    <button type="button" data-view="dashboard" aria-current="page">概览</button>
+    <button type="button" data-view="servers">服务器</button>
+    <button type="button" data-view="settings">设置</button>
+  </nav>
+
+  <div id="global-message" class="global-message" role="status" aria-live="polite"></div>
+  <div id="global-error" class="global-error" role="alert" aria-live="assertive" hidden></div>
+
+  <main id="app-main" tabindex="-1">
+    <section id="bootstrap-view" class="panel bootstrap-panel" aria-labelledby="bootstrap-title">
+      <div class="loading-mark" aria-hidden="true"></div>
+      <h2 id="bootstrap-title">正在建立安全会话</h2>
+      <p id="bootstrap-message">请稍候，正在验证 Telegram 管理员身份。</p>
+      <button id="bootstrap-retry" class="button" type="button" hidden>重试</button>
+    </section>
+
+    <section id="dashboard-view" class="view" aria-labelledby="dashboard-title" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Live fleet</p>
+          <h2 id="dashboard-title">运行概览</h2>
+        </div>
+        <p id="last-refresh" class="muted"></p>
+      </div>
+      <div class="stat-grid" aria-label="服务器状态汇总">
+        <article><span>全部</span><strong id="stat-total">—</strong></article>
+        <article><span>在线</span><strong id="stat-online">—</strong></article>
+        <article><span>离线</span><strong id="stat-offline">—</strong></article>
+        <article><span>停用</span><strong id="stat-disabled">—</strong></article>
+      </div>
+      <div id="server-list" class="server-grid" aria-label="服务器列表"></div>
+      <p id="server-empty" class="empty-state" hidden>尚未配置服务器。</p>
+    </section>
+
+    <section id="history-view" class="view" aria-labelledby="history-title" hidden>
+      <button id="history-back" class="button button-quiet" type="button">返回概览</button>
+      <div class="section-heading history-heading">
+        <div>
+          <p class="eyebrow">History</p>
+          <h2 id="history-title">服务器历史</h2>
+          <p id="history-subtitle" class="muted"></p>
+        </div>
+        <div class="range-picker" aria-label="历史时间范围">
+          <button type="button" data-range="1h" aria-pressed="true">1 小时</button>
+          <button type="button" data-range="6h" aria-pressed="false">6 小时</button>
+          <button type="button" data-range="24h" aria-pressed="false">24 小时</button>
+          <button type="button" data-range="7d" aria-pressed="false">7 天</button>
+        </div>
+      </div>
+      <div id="history-loading" class="inline-loading" role="status" hidden>正在载入历史数据…</div>
+      <div id="history-content" hidden>
+        <div class="chart-grid">
+          <figure class="chart-card">
+            <figcaption>CPU 使用率 <span id="cpu-summary" class="muted"></span></figcaption>
+            <svg id="cpu-chart" viewBox="0 0 640 180" role="img" aria-label="CPU 使用率趋势"></svg>
+          </figure>
+          <figure class="chart-card">
+            <figcaption>内存使用率 <span id="memory-summary" class="muted"></span></figcaption>
+            <svg id="memory-chart" viewBox="0 0 640 180" role="img" aria-label="内存使用率趋势"></svg>
+          </figure>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <caption>每分钟采样明细</caption>
+            <thead><tr><th>时间</th><th>CPU</th><th>内存</th><th>磁盘</th><th>负载</th><th>网络</th><th>运行时间</th><th>主机</th></tr></thead>
+            <tbody id="history-rows"></tbody>
+          </table>
+        </div>
+      </div>
+      <p id="history-empty" class="empty-state" hidden>此时间范围暂无历史数据。</p>
+    </section>
+
+    <section id="servers-view" class="view" aria-labelledby="servers-title" hidden>
+      <div class="section-heading">
+        <div><p class="eyebrow">Administration</p><h2 id="servers-title">服务器管理</h2></div>
+      </div>
+      <form id="create-server-form" class="panel form-grid">
+        <h3>添加服务器</h3>
+        <label>名称<input name="name" maxlength="120" required autocomplete="off"></label>
+        <label>分组<input name="group" maxlength="120" autocomplete="off"></label>
+        <label>排序<input name="sort_order" type="number" min="-2147483648" max="2147483647" value="0" required></label>
+        <label class="check-row"><input name="enabled" type="checkbox" checked> 启用采集</label>
+        <button class="button" type="submit">创建并生成 Agent token</button>
+      </form>
+      <div id="admin-server-list" class="admin-list" aria-label="已配置服务器"></div>
+    </section>
+
+    <section id="settings-view" class="view" aria-labelledby="settings-title" hidden>
+      <div class="section-heading">
+        <div><p class="eyebrow">Policy</p><h2 id="settings-title">监控设置</h2></div>
+      </div>
+      <form id="settings-form" class="panel form-grid">
+        <label>离线判定（秒）<input name="offline_threshold_seconds" type="number" min="1" max="86400" required></label>
+        <label>告警阈值（秒）<input name="alert_threshold_seconds" type="number" min="1" max="86400" required></label>
+        <label>历史保留（天）<input name="history_retention_days" type="number" min="1" max="365" required></label>
+        <label class="check-row"><input name="alert_preference" type="checkbox"> 接收离线告警</label>
+        <button class="button" type="submit">保存设置</button>
+      </form>
+    </section>
+  </main>
+
+  <dialog id="server-dialog" aria-labelledby="server-dialog-title">
+    <form id="edit-server-form" class="dialog-card">
+      <div class="dialog-heading">
+        <h2 id="server-dialog-title">编辑服务器</h2>
+        <button id="server-dialog-close" class="icon-button" type="button" aria-label="关闭">×</button>
+      </div>
+      <label>名称<input name="name" maxlength="120" required autocomplete="off"></label>
+      <label>分组<input name="group" maxlength="120" autocomplete="off"></label>
+      <label>排序<input name="sort_order" type="number" min="-2147483648" max="2147483647" required></label>
+      <label class="check-row"><input name="enabled" type="checkbox"> 启用采集</label>
+      <div class="button-row">
+        <button class="button" type="submit">保存</button>
+        <button id="rotate-token" class="button button-secondary" type="button">轮换 Agent token</button>
+      </div>
+      <fieldset class="danger-zone">
+        <legend>删除服务器</legend>
+        <p>输入服务器名称以确认删除。历史和告警状态也会被移除。</p>
+        <label>确认名称<input name="delete_confirmation" autocomplete="off"></label>
+        <button id="delete-server" class="button button-danger" type="button">永久删除</button>
+      </fieldset>
+    </form>
+  </dialog>
+
+  <dialog id="token-dialog" aria-labelledby="token-dialog-title">
+    <div class="dialog-card token-card">
+      <div class="dialog-heading">
+        <h2 id="token-dialog-title">Agent token</h2>
+        <button id="token-close" class="icon-button" type="button" aria-label="关闭并清除 token">×</button>
+      </div>
+      <p>此 token 只显示一次。请立即复制到对应 Agent 配置。</p>
+      <output id="token-value" class="token-value" aria-live="polite"></output>
+      <div class="button-row">
+        <button id="token-copy" class="button" type="button">复制 token</button>
+        <button id="token-done" class="button button-secondary" type="button">完成并清除</button>
+      </div>
+    </div>
+  </dialog>
+</body>
+</html>
