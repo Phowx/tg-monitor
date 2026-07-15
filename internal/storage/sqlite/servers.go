@@ -18,8 +18,8 @@ type rowScanner interface {
 }
 
 func (s *Store) CreateServer(ctx context.Context, server domain.Server) (domain.Server, error) {
-	if strings.TrimSpace(server.Name) == "" {
-		return domain.Server{}, errors.New("create server: name is required")
+	if err := validateServerMetadata(server.Name, server.Group); err != nil {
+		return domain.Server{}, fmt.Errorf("create server: %w", err)
 	}
 	if len(server.TokenSHA256) != sha256.Size {
 		return domain.Server{}, fmt.Errorf("create server: token hash must be %d bytes", sha256.Size)
@@ -72,19 +72,52 @@ func (s *Store) GetServer(ctx context.Context, id int64) (domain.Server, error) 
 }
 
 func (s *Store) UpdateServer(ctx context.Context, server domain.Server) error {
-	if strings.TrimSpace(server.Name) == "" {
-		return errors.New("update server: name is required")
+	if err := validateServerMetadata(server.Name, server.Group); err != nil {
+		return fmt.Errorf("update server: %w", err)
 	}
-	result, err := s.db.ExecContext(ctx, `
+
+	transaction, err := s.db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("update server %d: begin transaction: %w", server.ID, err)
+	}
+	defer transaction.Rollback()
+
+	var currentEnabled bool
+	if err := transaction.QueryRowContext(ctx, `SELECT enabled FROM servers WHERE id = ?`, server.ID).Scan(&currentEnabled); errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("update server %d: %w", server.ID, ErrNotFound)
+	} else if err != nil {
+		return fmt.Errorf("update server %d: read current state: %w", server.ID, err)
+	}
+
+	nowMS := s.nowMS()
+	result, err := transaction.ExecContext(ctx, `
 		UPDATE servers
 		SET name = ?, group_name = ?, sort_order = ?, enabled = ?, updated_at_ms = ?
 		WHERE id = ?`,
-		server.Name, server.Group, server.SortOrder, server.Enabled, s.nowMS(), server.ID,
+		server.Name, server.Group, server.SortOrder, server.Enabled, nowMS, server.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("update server %d: %w", server.ID, err)
 	}
-	return requireAffected(result, fmt.Sprintf("update server %d", server.ID))
+	if err := requireAffected(result, fmt.Sprintf("update server %d", server.ID)); err != nil {
+		return err
+	}
+
+	if currentEnabled != server.Enabled {
+		if err := resetAlertState(ctx, transaction, server.ID, nowMS); err != nil {
+			return fmt.Errorf("update server %d: %w", server.ID, err)
+		}
+		if !server.Enabled {
+			if err := suppressPendingServerAlerts(ctx, transaction, server.ID, nowMS); err != nil {
+				return fmt.Errorf("update server %d: %w", server.ID, err)
+			}
+		}
+	}
+
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("update server %d: commit: %w", server.ID, err)
+	}
+	return nil
 }
 
 func (s *Store) UpdateServerTokenHash(ctx context.Context, id int64, hash []byte) error {
@@ -99,11 +132,27 @@ func (s *Store) UpdateServerTokenHash(ctx context.Context, id int64, hash []byte
 }
 
 func (s *Store) DeleteServer(ctx context.Context, id int64) error {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM servers WHERE id = ?`, id)
+	transaction, err := s.db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("delete server %d: begin transaction: %w", id, err)
+	}
+	defer transaction.Rollback()
+
+	nowMS := s.nowMS()
+	if err := suppressPendingServerAlerts(ctx, transaction, id, nowMS); err != nil {
+		return fmt.Errorf("delete server %d: %w", id, err)
+	}
+	result, err := transaction.ExecContext(ctx, `DELETE FROM servers WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete server %d: %w", id, err)
 	}
-	return requireAffected(result, fmt.Sprintf("delete server %d", id))
+	if err := requireAffected(result, fmt.Sprintf("delete server %d", id)); err != nil {
+		return err
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("delete server %d: commit: %w", id, err)
+	}
+	return nil
 }
 
 func scanServer(scanner rowScanner) (domain.Server, error) {
@@ -119,6 +168,16 @@ func scanServer(scanner rowScanner) (domain.Server, error) {
 		&server.UpdatedAtMS,
 	)
 	return server, err
+}
+
+func validateServerMetadata(name, group string) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("name is required")
+	}
+	if len(name) > maxStoredAlertFieldBytes || len(group) > maxStoredAlertFieldBytes {
+		return fmt.Errorf("name and group must contain at most %d bytes", maxStoredAlertFieldBytes)
+	}
+	return nil
 }
 
 func requireAffected(result sql.Result, operation string) error {
