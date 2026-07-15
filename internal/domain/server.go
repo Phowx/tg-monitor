@@ -1,5 +1,12 @@
 package domain
 
+import "errors"
+
+var (
+	ErrNotFound       = errors.New("not found")
+	ErrSessionExpired = errors.New("session expired")
+)
+
 type Server struct {
 	ID          int64  `json:"id"`
 	Name        string `json:"name"`

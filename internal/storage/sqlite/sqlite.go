@@ -9,12 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tg-monitor/tg-monitor/internal/domain"
+
 	_ "modernc.org/sqlite"
 )
 
 var (
-	ErrNotFound       = errors.New("not found")
-	ErrSessionExpired = errors.New("session expired")
+	ErrNotFound       = domain.ErrNotFound
+	ErrSessionExpired = domain.ErrSessionExpired
 )
 
 type Store struct {
