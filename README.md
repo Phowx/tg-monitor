@@ -1,8 +1,8 @@
 # tg-monitor
 
-`tg-monitor` is a self-hosted server monitoring project. The current release includes a deployable central server and a non-root Linux Agent. Both are CGO-free Go binaries for amd64 and arm64.
+`tg-monitor` is a self-hosted server monitoring project. The current release includes a deployable central server, a non-root Linux Agent, and optional private Telegram administrator access. Both binaries are CGO-free for amd64 and arm64.
 
-The Telegram Bot/WebApp, alert delivery, and browser UI remain planned follow-on phases.
+The Telegram webhook, private administrator commands, and signed Mini App session bootstrap are implemented. The browser WebApp UI and alert delivery remain subsequent phases.
 
 ## Current capabilities
 
@@ -12,6 +12,8 @@ The Telegram Bot/WebApp, alert delivery, and browser UI remain planned follow-on
 - `GET /healthz` and SQLite-backed `GET /readyz` probes.
 - Latest metrics plus checkpointed UTC-minute history in pure-Go SQLite.
 - Startup/daily retention based on the persisted `settings.history_retention_days` value.
+- Optional secret-authenticated Telegram webhook handling with update deduplication, administrator allowlisting, `/status`, `/help`, and alert preference commands.
+- Signed Telegram Mini App login, hash-only trusted sessions, bootstrap/logout endpoints, and explicit webhook administration commands.
 - Non-root hardened systemd services, graceful signals, bounded inputs, TLS 1.2 minimum, and secret-safe transition logs.
 - Defensive HTTP timeouts, graceful `SIGINT`/`SIGTERM` shutdown, systemd hardening, and a Caddy TLS example.
 
@@ -58,6 +60,7 @@ Review `/etc/tg-monitor/server.env`. Its production-safe defaults are:
 TG_MONITOR_DATABASE_PATH=/var/lib/tg-monitor/monitor.db
 TG_MONITOR_LISTEN_ADDR=127.0.0.1:8080
 TG_MONITOR_CHECKPOINT_INTERVAL=15s
+TG_MONITOR_TELEGRAM_ENABLED=false
 ```
 
 systemd creates `/var/lib/tg-monitor` with the configured service ownership through `StateDirectory=tg-monitor`.
@@ -151,6 +154,99 @@ Inspect structured service logs without exposing Agent tokens:
 ```bash
 sudo journalctl -u tg-monitor --since '10 minutes ago' --no-pager
 ```
+
+## Telegram administrator access
+
+Telegram integration is optional and remains disabled by default. It exposes the webhook and signed session endpoints through the same public origin as the readiness and Agent APIs. Keep the application listener on loopback and publish the complete origin through TLS; do not strip `/telegram/webhook` or `/api/v1/auth/*` in the reverse proxy.
+
+### 1. Create the bot and prepare secrets
+
+In a private chat with Telegram's `@BotFather`, run `/newbot`, complete the prompts, and store the bot token in a password manager. Obtain each administrator's numeric Telegram user ID through a trusted method; the allowlist accepts comma-separated positive IDs.
+
+Generate a webhook secret using only the Bot API-supported `[A-Za-z0-9_-]` alphabet:
+
+```bash
+WEBHOOK_SECRET="$(openssl rand -base64 48 | tr '+/' '_-' | tr -d '=\n')"
+printf '%s\n' "$WEBHOOK_SECRET"
+unset WEBHOOK_SECRET
+```
+
+Edit the root-owned environment file and retain mode `0600`:
+
+```bash
+sudoedit /etc/tg-monitor/server.env
+sudo chown root:root /etc/tg-monitor/server.env
+sudo chmod 0600 /etc/tg-monitor/server.env
+```
+
+Uncomment and fill the optional block from `deploy/systemd/server.env.example`:
+
+```dotenv
+TG_MONITOR_TELEGRAM_ENABLED=true
+TG_MONITOR_PUBLIC_URL=https://monitor.example.com
+TG_MONITOR_BOT_TOKEN=<BotFather-token>
+TG_MONITOR_WEBHOOK_SECRET=<random-A-Za-z0-9_-secret>
+TG_MONITOR_ADMIN_TELEGRAM_IDS=<numeric-user-id>[,<another-id>]
+TG_MONITOR_SESSION_TTL=12h
+TG_MONITOR_INIT_DATA_MAX_AGE=5m
+TG_MONITOR_TELEGRAM_HTTP_TIMEOUT=10s
+```
+
+`TG_MONITOR_PUBLIC_URL` must be the public HTTPS origin only, without a path, query, fragment, or credentials.
+
+### 2. Enable routes and register the webhook
+
+Restart the service, verify local readiness, then explicitly register the webhook. Startup never changes Bot API webhook state.
+
+```bash
+sudo systemctl restart tg-monitor
+curl --fail --silent http://127.0.0.1:8080/readyz
+sudo sh -c 'set -a; . /etc/tg-monitor/server.env; set +a; exec runuser --preserve-environment -u tg-monitor -- /usr/local/bin/tg-monitor-server telegram set-webhook'
+sudo sh -c 'set -a; . /etc/tg-monitor/server.env; set +a; exec runuser --preserve-environment -u tg-monitor -- /usr/local/bin/tg-monitor-server telegram get-webhook'
+```
+
+The commands print `webhook=registered` and safe webhook metadata. They do not open SQLite or print the bot token, webhook secret, or Telegram's last error description.
+
+Open a private chat with the bot from an allowlisted account and send `/status`. Group chats, channel posts, missing senders, and non-administrators are acknowledged without command side effects. `/help`, `/alerts_on`, and `/alerts_off` are also available.
+
+### 3. Verify the local workflow and logs
+
+The deterministic smoke compiles and runs the unmodified server against a loopback HTTPS CONNECT interceptor with a short-lived CA and `api.telegram.org` certificate. Its final output must be exactly:
+
+```bash
+GO=/path/to/go bash scripts/smoke-telegram.sh
+```
+
+```text
+telegram_webhook=ok duplicate=ok
+telegram_session=ok logout=ok
+telegram_sigterm=clean secret_log_scan=clean
+```
+
+After production verification, scan the journal for a token or secret canary without putting it in shell history:
+
+```bash
+read -rsp 'Exact canary to scan for: ' CANARY; echo
+if sudo journalctl -u tg-monitor --since '30 minutes ago' --no-pager | grep -F -- "$CANARY"; then
+  echo 'secret canary found in journal' >&2
+else
+  echo 'secret canary absent from journal'
+fi
+unset CANARY
+```
+
+### 4. Disable or roll back Telegram
+
+To stop new Telegram traffic while preserving core monitoring, set `TG_MONITOR_TELEGRAM_ENABLED=false` and restart; readiness and Agent ingestion remain available. Optionally delete the remote webhook while the token values are still present:
+
+```bash
+sudo sh -c 'set -a; . /etc/tg-monitor/server.env; set +a; exec runuser --preserve-environment -u tg-monitor -- /usr/local/bin/tg-monitor-server telegram delete-webhook'
+sudoedit /etc/tg-monitor/server.env # set TG_MONITOR_TELEGRAM_ENABLED=false
+sudo systemctl restart tg-monitor
+curl --fail --silent http://127.0.0.1:8080/readyz
+```
+
+Schema version 2 is additive: it only adds the Telegram update-deduplication table and index; existing server, metric, session, and preference data are not rewritten. An older binary that supports only schema version 1 still rejects a version-2 database, so restore the pre-upgrade database backup when rolling the binary back across this version boundary.
 
 ## Linux Agent deployment
 
@@ -254,7 +350,9 @@ sudo systemctl start tg-monitor
 curl --fail http://127.0.0.1:8080/readyz
 ```
 
-If verification fails, stop the service, restore `/usr/local/bin/tg-monitor-server.previous`, and start it again. Restore the database backup only when release notes explicitly describe an incompatible migration; current migrations are forward-only and idempotent.
+If verification fails, stop the service, restore `/usr/local/bin/tg-monitor-server.previous`, and start it again. Migrations are forward-only and idempotent. Schema version 2 is additive, but a version-1 binary rejects the newer schema marker; restore the matching pre-upgrade database backup when crossing that boundary.
+
+For a Telegram-only rollback, keep the current binary and database, set `TG_MONITOR_TELEGRAM_ENABLED=false`, optionally run `telegram delete-webhook`, restart, and verify `/readyz` plus Agent ingestion.
 
 Upgrade the Agent independently on each monitored host, preserving the previous executable:
 
@@ -276,6 +374,6 @@ Confirm a new sample with the central `metrics latest` command. To roll back, st
 - `internal/httpapi`, `internal/auth`, `internal/monitoring`, `internal/serverapp`, `internal/servercmd`: central-server layers.
 - `internal/storage/sqlite`: migrations and persistence.
 - `deploy`: hardened systemd and Caddy examples.
-- `scripts/build-*.sh` and `scripts/smoke-agent.sh`: reproducible builds and real-process smoke verification.
+- `scripts/build-*.sh`, `scripts/smoke-agent.sh`, and `scripts/smoke-telegram.sh`: reproducible builds and real-process smoke verification.
 
 The project is licensed under the MIT License. See `NOTICE` for inspiration attribution.

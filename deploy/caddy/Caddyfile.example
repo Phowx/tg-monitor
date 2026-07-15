@@ -1,4 +1,6 @@
-# Replace this hostname with the public DNS name used by Agents.
+# Replace this hostname with the public DNS name used by Agents and Telegram.
+# Forward the complete origin so /telegram/webhook and /api/v1/auth/* retain their paths.
+# Request/header/body access logging is intentionally not enabled here.
 monitor.example.com {
 	encode zstd gzip
 	reverse_proxy 127.0.0.1:8080
