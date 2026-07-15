@@ -3,7 +3,6 @@ package sessionapi
 import (
 	"errors"
 	"net/http"
-	"time"
 
 	"github.com/tg-monitor/tg-monitor/internal/domain"
 )
@@ -12,7 +11,7 @@ func (handler *Handler) serveSession(writer http.ResponseWriter, request *http.R
 	if !requireMethod(writer, request, http.MethodGet) {
 		return
 	}
-	cookie, err := request.Cookie(handler.cookieName)
+	cookie, err := request.Cookie(handler.policy.CookieName)
 	if err != nil {
 		handler.writeUnauthorizedSession(writer)
 		return
@@ -41,7 +40,7 @@ func (handler *Handler) serveLogout(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	handler.clearCookie(writer)
-	cookie, err := request.Cookie(handler.cookieName)
+	cookie, err := request.Cookie(handler.policy.CookieName)
 	if err != nil {
 		writer.WriteHeader(http.StatusNoContent)
 		return
@@ -60,8 +59,5 @@ func (handler *Handler) writeUnauthorizedSession(writer http.ResponseWriter) {
 }
 
 func (handler *Handler) clearCookie(writer http.ResponseWriter) {
-	http.SetCookie(writer, &http.Cookie{
-		Name: handler.cookieName, Value: "", Path: "/", Expires: time.Unix(1, 0).UTC(),
-		MaxAge: -1, HttpOnly: true, Secure: handler.secure, SameSite: http.SameSiteStrictMode,
-	})
+	http.SetCookie(writer, handler.policy.Clear())
 }

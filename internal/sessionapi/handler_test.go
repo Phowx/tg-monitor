@@ -161,7 +161,7 @@ func TestTelegramLoginCreatesHashOnlyRepositorySessionAndHTTPSCookie(t *testing.
 	if cookie.Name != "__Host-tg_monitor_session" || cookie.Value != wantToken {
 		t.Fatalf("cookie identity = %#v", cookie)
 	}
-	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode || cookie.Path != "/" || cookie.Domain != "" {
+	if !cookie.HttpOnly || !cookie.Secure || !cookie.Partitioned || cookie.SameSite != http.SameSiteNoneMode || cookie.Path != "/" || cookie.Domain != "" {
 		t.Fatalf("cookie flags = %#v", cookie)
 	}
 	if cookie.MaxAge != 7_200 || !cookie.Expires.Equal(harness.now.Add(2*time.Hour)) {
@@ -183,7 +183,7 @@ func TestSessionCookieUsesLoopbackHTTPTestContract(t *testing.T) {
 				t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
 			}
 			cookie := response.Result().Cookies()[0]
-			if cookie.Name != "tg_monitor_session" || cookie.Secure {
+			if cookie.Name != "tg_monitor_session" || cookie.Secure || cookie.Partitioned || cookie.SameSite != http.SameSiteStrictMode {
 				t.Fatalf("loopback cookie = %#v", cookie)
 			}
 		})

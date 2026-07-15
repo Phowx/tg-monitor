@@ -151,7 +151,15 @@ func assertClearedSessionCookie(t *testing.T, response *httptest.ResponseRecorde
 		t.Fatalf("clearing cookies = %#v, want one", cookies)
 	}
 	cookie := cookies[0]
-	if cookie.Name != "__Host-tg_monitor_session" || cookie.Value != "" || cookie.MaxAge != -1 || cookie.Path != "/" || !cookie.HttpOnly || cookie.Secure != secure || cookie.SameSite != http.SameSiteStrictMode || cookie.Domain != "" {
+	wantName := "tg_monitor_session"
+	wantSameSite := http.SameSiteStrictMode
+	wantPartitioned := false
+	if secure {
+		wantName = "__Host-tg_monitor_session"
+		wantSameSite = http.SameSiteNoneMode
+		wantPartitioned = true
+	}
+	if cookie.Name != wantName || cookie.Value != "" || cookie.MaxAge != -1 || cookie.Path != "/" || !cookie.HttpOnly || cookie.Secure != secure || cookie.SameSite != wantSameSite || cookie.Partitioned != wantPartitioned || cookie.Domain != "" {
 		t.Fatalf("cleared cookie = %#v", cookie)
 	}
 	if !cookie.Expires.Equal(time.Unix(1, 0).UTC()) {

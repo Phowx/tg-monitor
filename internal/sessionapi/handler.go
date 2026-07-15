@@ -6,19 +6,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"mime"
-	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/tg-monitor/tg-monitor/internal/domain"
 	"github.com/tg-monitor/tg-monitor/internal/telegramauth"
+	"github.com/tg-monitor/tg-monitor/internal/websession"
 )
 
 const maxAuthBodyBytes int64 = 64 << 10
@@ -52,8 +49,7 @@ type Handler struct {
 	now        func() time.Time
 	verify     func(string, string, time.Time, time.Duration, []int64) (telegramauth.User, error)
 	logger     *slog.Logger
-	cookieName string
-	secure     bool
+	policy     websession.Policy
 }
 
 type errorEnvelope struct {
@@ -66,7 +62,7 @@ type errorDetail struct {
 }
 
 func NewHandler(cfg Config, dependencies Dependencies) (http.Handler, error) {
-	origin, secure, err := normalizeOrigin(cfg.PublicURL)
+	policy, err := websession.NewPolicy(cfg.PublicURL)
 	if err != nil {
 		return nil, err
 	}
@@ -98,16 +94,12 @@ func NewHandler(cfg Config, dependencies Dependencies) (http.Handler, error) {
 	if dependencies.Logger == nil {
 		dependencies.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	cfg.PublicURL = origin
+	cfg.PublicURL = policy.Origin
 	cfg.BotToken = strings.TrimSpace(cfg.BotToken)
-	cookieName := "tg_monitor_session"
-	if secure {
-		cookieName = "__Host-tg_monitor_session"
-	}
 	handler := &Handler{
 		config: cfg, repository: dependencies.Repository, random: dependencies.Random,
 		now: dependencies.Now, verify: dependencies.Verify, logger: dependencies.Logger,
-		cookieName: cookieName, secure: secure,
+		policy: policy,
 	}
 	return handler.withAccessLog(http.HandlerFunc(handler.serveHTTP)), nil
 }
@@ -174,37 +166,12 @@ func (handler *Handler) serveTelegramLogin(writer http.ResponseWriter, request *
 		writeError(writer, http.StatusInternalServerError, "internal_error", "internal server error")
 		return
 	}
-	http.SetCookie(writer, &http.Cookie{
-		Name: handler.cookieName, Value: rawToken, Path: "/", Expires: expires,
-		MaxAge: int(math.Ceil(handler.config.SessionTTL.Seconds())), HttpOnly: true,
-		Secure: handler.secure, SameSite: http.SameSiteStrictMode,
-	})
+	http.SetCookie(writer, handler.policy.Set(rawToken, expires, handler.config.SessionTTL))
 	writer.WriteHeader(http.StatusNoContent)
 }
 
 func (handler *Handler) sameOrigin(origin string) bool {
 	return origin == "" || origin == handler.config.PublicURL
-}
-
-func normalizeOrigin(raw string) (string, bool, error) {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Opaque != "" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
-		return "", false, errors.New("create session handler: public URL must be an origin")
-	}
-	parsed.Scheme = strings.ToLower(parsed.Scheme)
-	secure := parsed.Scheme == "https"
-	if !secure && !(parsed.Scheme == "http" && isLoopback(parsed.Hostname())) {
-		return "", false, errors.New("create session handler: public URL must use HTTPS")
-	}
-	return fmt.Sprintf("%s://%s", parsed.Scheme, parsed.Host), secure, nil
-}
-
-func isLoopback(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func requireMethod(writer http.ResponseWriter, request *http.Request, method string) bool {
