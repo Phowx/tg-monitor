@@ -52,6 +52,7 @@ func TestMigrateIsIdempotentAndSeedsSettings(t *testing.T) {
 	tables := []string{
 		"schema_migrations", "servers", "latest_metrics", "metric_samples",
 		"sessions", "user_preferences", "settings", "alert_states", "alert_outbox",
+		"telegram_updates",
 	}
 	for _, table := range tables {
 		var count int
@@ -60,7 +61,7 @@ func TestMigrateIsIdempotentAndSeedsSettings(t *testing.T) {
 			t.Errorf("table %s count = %d, error = %v", table, count, err)
 		}
 	}
-	for _, index := range []string{"metric_samples_server_bucket_idx", "alert_outbox_delivery_idx"} {
+	for _, index := range []string{"metric_samples_server_bucket_idx", "alert_outbox_delivery_idx", "telegram_updates_received_idx"} {
 		var count int
 		err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='index' AND name=?`, index).Scan(&count)
 		if err != nil || count != 1 {
@@ -75,8 +76,8 @@ func TestMigrateIsIdempotentAndSeedsSettings(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT count(*), max(version) FROM schema_migrations`).Scan(&migrationCount, &version); err != nil {
 		t.Fatalf("query migrations: %v", err)
 	}
-	if migrationCount != 1 || version != 1 {
-		t.Fatalf("migrations = count %d, max %d; want count 1, max 1", migrationCount, version)
+	if migrationCount != 2 || version != 2 {
+		t.Fatalf("migrations = count %d, max %d; want count 2, max 2", migrationCount, version)
 	}
 
 	var offline, alert, retention int64

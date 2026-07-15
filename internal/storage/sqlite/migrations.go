@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-const latestSchemaVersion = 1
+const latestSchemaVersion = 2
 
 var migrationV1 = []string{
 	`CREATE TABLE servers (
@@ -106,6 +106,14 @@ var migrationV1 = []string{
 	`CREATE INDEX alert_outbox_delivery_idx ON alert_outbox(delivered_at_ms, next_attempt_at_ms)`,
 }
 
+var migrationV2 = []string{
+	`CREATE TABLE telegram_updates (
+		update_id INTEGER PRIMARY KEY CHECK(update_id > 0),
+		received_at_ms INTEGER NOT NULL CHECK(received_at_ms > 0)
+	)`,
+	`CREATE INDEX telegram_updates_received_idx ON telegram_updates(received_at_ms)`,
+}
+
 func (s *Store) Migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version INTEGER PRIMARY KEY,
@@ -121,10 +129,20 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if version > latestSchemaVersion {
 		return fmt.Errorf("database schema version %d is newer than supported version %d", version, latestSchemaVersion)
 	}
-	if version == latestSchemaVersion {
-		return nil
+	for version < latestSchemaVersion {
+		switch version + 1 {
+		case 1:
+			if err := s.applyMigrationV1(ctx); err != nil {
+				return err
+			}
+		case 2:
+			if err := s.applyMigration(ctx, 2, migrationV2); err != nil {
+				return err
+			}
+		}
+		version++
 	}
-	return s.applyMigrationV1(ctx)
+	return nil
 }
 
 func (s *Store) applyMigrationV1(ctx context.Context) error {
@@ -148,6 +166,31 @@ func (s *Store) applyMigrationV1(ctx context.Context) error {
 	}
 	if err := transaction.Commit(); err != nil {
 		return fmt.Errorf("commit schema migration 1: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) applyMigration(ctx context.Context, version int, statements []string) error {
+	transaction, err := s.db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin schema migration %d: %w", version, err)
+	}
+	defer transaction.Rollback()
+
+	for _, statement := range statements {
+		if _, err := transaction.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("apply schema migration %d: %w", version, err)
+		}
+	}
+	if _, err := transaction.ExecContext(ctx,
+		`INSERT INTO schema_migrations(version, applied_at_ms) VALUES(?, ?)`,
+		version,
+		s.nowMS(),
+	); err != nil {
+		return fmt.Errorf("record schema migration %d: %w", version, err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit schema migration %d: %w", version, err)
 	}
 	return nil
 }
