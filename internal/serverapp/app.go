@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tg-monitor/tg-monitor/internal/adminapi"
+	"github.com/tg-monitor/tg-monitor/internal/alerting"
 	"github.com/tg-monitor/tg-monitor/internal/auth"
 	"github.com/tg-monitor/tg-monitor/internal/config"
 	"github.com/tg-monitor/tg-monitor/internal/httpapi"
@@ -40,6 +41,7 @@ type appDependencies struct {
 type App struct {
 	store              *sqlite.Store
 	monitor            *monitoring.Service
+	alertWorker        *alerting.Worker
 	server             *http.Server
 	checkpointInterval time.Duration
 	now                func() time.Time
@@ -84,6 +86,7 @@ func newWithDependencies(ctx context.Context, cfg config.ApplicationRuntimeConfi
 		Logger:        logger,
 	})
 	var handler http.Handler = core
+	var alertWorker *alerting.Worker
 
 	if telegram := cfg.Telegram; telegram != nil {
 		if dependencies.newTelegramSender == nil {
@@ -104,6 +107,12 @@ func newWithDependencies(ctx context.Context, cfg config.ApplicationRuntimeConfi
 		})
 		if err != nil {
 			return fail(fmt.Errorf("create Telegram routes: webhook: %w", err))
+		}
+		alertWorker, err = alerting.New(alerting.Config{
+			AdminTelegramIDs: telegram.AdminTelegramIDs,
+		}, store, sender, dependencies.now, logger)
+		if err != nil {
+			return fail(fmt.Errorf("create Telegram routes: alert worker: %w", err))
 		}
 		sessions, err := sessionapi.NewHandler(sessionapi.Config{
 			PublicURL: telegram.PublicURL, BotToken: telegram.BotToken,
@@ -145,6 +154,7 @@ func newWithDependencies(ctx context.Context, cfg config.ApplicationRuntimeConfi
 		monitor:            monitor,
 		checkpointInterval: cfg.Server.CheckpointInterval,
 		now:                dependencies.now,
+		alertWorker:        alertWorker,
 		logger:             logger,
 		server: &http.Server{
 			Addr:              cfg.Server.ListenAddr,
@@ -174,6 +184,13 @@ func (app *App) Serve(ctx context.Context, listener net.Listener) error {
 	go app.runRetentionWorker(workerCtx, &workers)
 
 	serveErrors := make(chan error, 1)
+	if app.alertWorker != nil {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			app.alertWorker.Run(workerCtx)
+		}()
+	}
 	go func() {
 		serveErrors <- app.server.Serve(listener)
 	}()

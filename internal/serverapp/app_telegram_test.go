@@ -74,6 +74,9 @@ func TestAppServeComposesTelegramRoutesWithSharedStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateServer() error = %v", err)
 	}
+	if err := app.store.SetAlertPreference(context.Background(), 42, false); err != nil {
+		t.Fatalf("SetAlertPreference(false) error = %v", err)
+	}
 	if err := app.store.CreateSession(context.Background(), "expired-session", domain.Session{
 		TelegramUserID: 42,
 		CreatedAtMS:    now.Add(-2 * time.Hour).UnixMilli(),
