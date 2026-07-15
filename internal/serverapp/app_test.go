@@ -19,11 +19,13 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewJSONHandler(io.Discard, nil))
 }
 
-func testRuntimeConfig(databasePath string, checkpoint time.Duration) config.ServerRuntimeConfig {
-	return config.ServerRuntimeConfig{
-		DatabasePath:       databasePath,
-		ListenAddr:         "127.0.0.1:0",
-		CheckpointInterval: checkpoint,
+func testRuntimeConfig(databasePath string, checkpoint time.Duration) config.ApplicationRuntimeConfig {
+	return config.ApplicationRuntimeConfig{
+		Server: config.ServerRuntimeConfig{
+			DatabasePath:       databasePath,
+			ListenAddr:         "127.0.0.1:0",
+			CheckpointInterval: checkpoint,
+		},
 	}
 }
 
@@ -74,6 +76,21 @@ func TestAppServeExposesHealthAndReadinessAndStopsOnCancellation(t *testing.T) {
 				t.Fatalf("GET %s did not become ready: %v", path, requestErr)
 			}
 			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	for _, path := range []string{
+		"/telegram/webhook",
+		"/api/v1/auth/telegram",
+		"/api/v1/auth/session",
+		"/api/v1/auth/logout",
+	} {
+		response, err := client.Get("http://" + listener.Addr().String() + path)
+		if err != nil {
+			t.Fatalf("GET core-only %s error = %v", path, err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusNotFound {
+			t.Fatalf("GET core-only %s status = %d, want 404", path, response.StatusCode)
 		}
 	}
 

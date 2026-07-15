@@ -259,7 +259,7 @@ func (dependencies Dependencies) withDefaults() Dependencies {
 }
 
 func serve(ctx context.Context, cfg config.ServerRuntimeConfig, logger *slog.Logger) error {
-	app, err := serverapp.New(ctx, cfg, logger)
+	app, err := serverapp.New(ctx, config.ApplicationRuntimeConfig{Server: cfg}, logger)
 	if err != nil {
 		return err
 	}

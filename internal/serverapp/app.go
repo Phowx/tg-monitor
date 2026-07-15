@@ -2,6 +2,7 @@ package serverapp
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +16,10 @@ import (
 	"github.com/tg-monitor/tg-monitor/internal/config"
 	"github.com/tg-monitor/tg-monitor/internal/httpapi"
 	"github.com/tg-monitor/tg-monitor/internal/monitoring"
+	"github.com/tg-monitor/tg-monitor/internal/sessionapi"
 	"github.com/tg-monitor/tg-monitor/internal/storage/sqlite"
+	"github.com/tg-monitor/tg-monitor/internal/telegramapi"
+	"github.com/tg-monitor/tg-monitor/internal/telegrambot"
 )
 
 const (
@@ -23,36 +27,107 @@ const (
 	shutdownTimeout   = 10 * time.Second
 )
 
+type telegramSenderFactory func(string, time.Duration) (telegrambot.Sender, error)
+
+type appDependencies struct {
+	newTelegramSender telegramSenderFactory
+	random            io.Reader
+	now               func() time.Time
+}
+
 type App struct {
 	store              *sqlite.Store
 	monitor            *monitoring.Service
 	server             *http.Server
 	checkpointInterval time.Duration
+	now                func() time.Time
 	logger             *slog.Logger
 	closeOnce          sync.Once
 	closeErr           error
 }
 
-func New(ctx context.Context, cfg config.ServerRuntimeConfig, logger *slog.Logger) (*App, error) {
-	store, err := sqlite.Open(ctx, cfg.DatabasePath)
+func New(ctx context.Context, cfg config.ApplicationRuntimeConfig, logger *slog.Logger) (*App, error) {
+	return newWithDependencies(ctx, cfg, logger, appDependencies{
+		newTelegramSender: func(token string, timeout time.Duration) (telegrambot.Sender, error) {
+			return telegramapi.New(token, timeout)
+		},
+		random: rand.Reader,
+		now:    time.Now,
+	})
+}
+
+func newWithDependencies(ctx context.Context, cfg config.ApplicationRuntimeConfig, logger *slog.Logger, dependencies appDependencies) (*App, error) {
+	if dependencies.now == nil {
+		dependencies.now = time.Now
+	}
+	if dependencies.random == nil {
+		dependencies.random = rand.Reader
+	}
+
+	store, err := sqlite.Open(ctx, cfg.Server.DatabasePath)
 	if err != nil {
 		return nil, err
 	}
+	fail := func(err error) (*App, error) {
+		return nil, errors.Join(err, store.Close())
+	}
+
 	logger = appLoggerOrDiscard(logger)
 	monitor := monitoring.NewService(store)
-	handler := httpapi.NewHandler(httpapi.Dependencies{
+	core := httpapi.NewHandler(httpapi.Dependencies{
 		Readiness:     store,
 		Authenticator: auth.NewAuthenticator(store),
 		Ingestor:      monitor,
+		Now:           dependencies.now,
 		Logger:        logger,
 	})
+	var handler http.Handler = core
+
+	if telegram := cfg.Telegram; telegram != nil {
+		if dependencies.newTelegramSender == nil {
+			return fail(errors.New("create Telegram routes: sender factory is required"))
+		}
+		sender, err := dependencies.newTelegramSender(telegram.BotToken, telegram.HTTPTimeout)
+		if err != nil {
+			return fail(fmt.Errorf("create Telegram routes: sender: %w", err))
+		}
+		commander := telegrambot.NewCommander(store, dependencies.now)
+		webhook, err := telegrambot.NewWebhookHandler(telegrambot.WebhookDependencies{
+			Updates: store, Sender: sender, Replier: commander,
+			Secret: telegram.WebhookSecret, AdminIDs: telegram.AdminTelegramIDs,
+			Now: dependencies.now, Logger: logger,
+		})
+		if err != nil {
+			return fail(fmt.Errorf("create Telegram routes: webhook: %w", err))
+		}
+		sessions, err := sessionapi.NewHandler(sessionapi.Config{
+			PublicURL: telegram.PublicURL, BotToken: telegram.BotToken,
+			AdminTelegramIDs: telegram.AdminTelegramIDs,
+			SessionTTL:       telegram.SessionTTL, InitDataMaxAge: telegram.InitDataMaxAge,
+		}, sessionapi.Dependencies{
+			Repository: store, Random: dependencies.random, Now: dependencies.now, Logger: logger,
+		})
+		if err != nil {
+			return fail(fmt.Errorf("create Telegram routes: sessions: %w", err))
+		}
+
+		mux := http.NewServeMux()
+		mux.Handle("/telegram/webhook", webhook)
+		mux.Handle("/api/v1/auth/telegram", sessions)
+		mux.Handle("/api/v1/auth/session", sessions)
+		mux.Handle("/api/v1/auth/logout", sessions)
+		mux.Handle("/", core)
+		handler = mux
+	}
+
 	return &App{
 		store:              store,
 		monitor:            monitor,
-		checkpointInterval: cfg.CheckpointInterval,
+		checkpointInterval: cfg.Server.CheckpointInterval,
+		now:                dependencies.now,
 		logger:             logger,
 		server: &http.Server{
-			Addr:              cfg.ListenAddr,
+			Addr:              cfg.Server.ListenAddr,
 			Handler:           handler,
 			ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout:       15 * time.Second,
@@ -64,8 +139,12 @@ func New(ctx context.Context, cfg config.ServerRuntimeConfig, logger *slog.Logge
 }
 
 func (app *App) Serve(ctx context.Context, listener net.Listener) error {
-	if _, err := RunRetentionOnce(ctx, app.store, time.Now()); err != nil {
+	now := app.now()
+	if _, err := RunRetentionOnce(ctx, app.store, now); err != nil {
 		app.logger.Error("metric retention failed", "error", err)
+	}
+	if _, err := RunAccessCleanupOnce(ctx, app.store, now); err != nil {
+		app.logger.Error("access cleanup failed", "error", err)
 	}
 
 	workerCtx, stopWorkers := context.WithCancel(ctx)
@@ -137,9 +216,15 @@ func (app *App) runRetentionWorker(ctx context.Context, workers *sync.WaitGroup)
 			deleted, err := RunRetentionOnce(ctx, app.store, now)
 			if err != nil {
 				app.logger.Error("metric retention failed", "error", err)
-				continue
+			} else {
+				app.logger.Info("metric retention completed", "deleted", deleted)
 			}
-			app.logger.Info("metric retention completed", "deleted", deleted)
+			cleaned, err := RunAccessCleanupOnce(ctx, app.store, now)
+			if err != nil {
+				app.logger.Error("access cleanup failed", "error", err)
+			} else {
+				app.logger.Info("access cleanup completed", "sessions", cleaned.Sessions, "updates", cleaned.Updates)
+			}
 		}
 	}
 }
