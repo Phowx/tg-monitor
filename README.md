@@ -2,7 +2,7 @@
 
 `tg-monitor` is a self-hosted server monitoring project. The current release includes a deployable central server, a non-root Linux Agent, and optional private Telegram administrator access. Both binaries are CGO-free for amd64 and arm64.
 
-The Telegram webhook, private administrator commands, signed Mini App session bootstrap, and embedded operator WebApp are implemented. Offline alert evaluation and delivery remain a subsequent phase.
+The Telegram webhook, private administrator commands, signed Mini App session bootstrap, embedded operator WebApp, and durable offline/recovery alerts are implemented.
 
 ## Current capabilities
 
@@ -13,6 +13,7 @@ The Telegram webhook, private administrator commands, signed Mini App session bo
 - Latest metrics plus checkpointed UTC-minute history in pure-Go SQLite.
 - Startup/daily retention based on the persisted `settings.history_retention_days` value.
 - Optional secret-authenticated Telegram webhook handling with update deduplication, administrator allowlisting, `/status`, `/help`, and alert preference commands.
+- Durable per-administrator Telegram offline/recovery alerts with restart-safe delivery, exponential retry, and terminal-row cleanup.
 - Signed Telegram Mini App login, hash-only trusted sessions, monitoring/administration APIs, an embedded responsive operator UI, and explicit webhook administration commands.
 - Non-root hardened systemd services, graceful signals, bounded inputs, TLS 1.2 minimum, and secret-safe transition logs.
 - Defensive HTTP timeouts, graceful `SIGINT`/`SIGTERM` shutdown, systemd hardening, and a Caddy TLS example.
@@ -294,6 +295,36 @@ curl --fail --silent http://127.0.0.1:8080/readyz
 After restart, verify `/readyz` and Agent ingestion still succeed while `/app/` and `/api/v1/admin/overview` return 404. This WebApp rollback requires no database migration or data deletion.
 
 Schema version 2 is additive: it only adds the Telegram update-deduplication table and index; existing server, metric, session, and preference data are not rewritten. An older binary that supports only schema version 1 still rejects a version-2 database, so restore the pre-upgrade database backup when rolling the binary back across this version boundary.
+
+## Offline and recovery alerts
+
+Durable alerts run in the central server only while Telegram integration is enabled. The worker evaluates immediately at startup and every five seconds, using the server-side metric receive time so an Agent clock cannot manufacture or delay an outage.
+
+The offline threshold, alert threshold, and history retention are persisted in SQLite and edited in the WebApp settings screen. Values are not environment variables. Both thresholds must be between 1 and 86,400 seconds, and the alert threshold cannot be lower than the offline threshold.
+
+- Recipients are the current `TG_MONITOR_ADMIN_TELEGRAM_IDS` allowlist members whose alert preference is enabled. A missing preference defaults to enabled; `/alerts_on`, `/alerts_off`, and the WebApp switch update it.
+- Offline and recovery messages are plain text with UTC timestamps. Delivery retries forever at 5 seconds with exponential backoff capped at 15 minutes.
+- Disabling or deleting a server, disabling a recipient's alerts, or removing an administrator terminally suppresses matching pending delivery. Suppressed rows are never replayed after re-enabling.
+- Delivered and suppressed outbox rows are retained for 30 days and removed by startup/daily access cleanup. Pending retries are never removed by age.
+
+Delivery is at-least-once. If Telegram accepts a request but the process stops before SQLite records success, the retry may produce a duplicate message. The Bot API does not provide a caller idempotency key for `sendMessage`.
+
+Alert logs contain only operation classes and aggregate counts; they omit Telegram user IDs, message text, payload JSON, Bot API response bodies, and dependency error details. Inspect them without exporting the root-owned environment file:
+
+```bash
+sudo journalctl -u tg-monitor --since '30 minutes ago' --no-pager
+```
+
+The deterministic alert smoke proves first-attempt failure, restart retry, recovery, cleanup, graceful termination, and log-secret safety:
+
+```bash
+GO=/path/to/go bash scripts/smoke-alerts.sh
+```
+
+```text
+alert_offline=ok retry_restart=ok recovery=ok cleanup=ok
+alert_sigterm=clean secret_log_scan=clean
+```
 
 ## Linux Agent deployment
 
